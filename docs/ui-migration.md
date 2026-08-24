@@ -28,6 +28,11 @@ These surfaces are reused directly. They are not recreated in the broker app.
   organizations, encrypted credentials, official-stack deployment, durable
   jobs, ports, volumes, and diagnostics.
 
+The Studio image uses Next.js's Webpack production builder with its memory
+optimization enabled. This is a build-only accommodation for smaller
+self-hosted builders and does not alter the vendored UI behavior or
+presentation.
+
 During the visual-parity milestone, the Studio image still contains the
 Multi-Head backend adapters so every reference route can render. Those adapters
 will subsequently be replaced with private server-to-server calls to the

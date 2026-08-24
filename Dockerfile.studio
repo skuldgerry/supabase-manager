@@ -37,8 +37,9 @@ COPY --from=turbo /app/out/full ./
 # by the broker session adapter after the UI parity milestone.
 ARG NEXT_PUBLIC_STUDIO_AUTH=gotrue
 ENV NEXT_PUBLIC_STUDIO_AUTH=${NEXT_PUBLIC_STUDIO_AUTH}
+ENV NODE_OPTIONS="--max-old-space-size=3072"
 
-RUN pnpm --filter studio exec next build
+RUN pnpm --filter studio exec next build --webpack
 
 FROM docker:27-cli AS docker-tools
 RUN set -e; \
