@@ -1,0 +1,40 @@
+{
+  "name": "supabase-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A self-hosted control plane for isolated official Supabase deployments.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skuldgerry/supabase-manager.git"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "tsx --test tests/**/*.test.ts",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "2.1.0",
+    "better-sqlite3": "13.0.3",
+    "next": "16.3.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.3.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0"
+  }
+}
