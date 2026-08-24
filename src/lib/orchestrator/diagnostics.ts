@@ -16,6 +16,16 @@ export function sanitizeText(input: string, extraSecrets: readonly string[] = []
   return output;
 }
 
+/** Keep both the command context and the actionable final error. */
+export function boundedDiagnosticText(input: string, maximumLength = 4_000): string {
+  if (input.length <= maximumLength) return input;
+  if (maximumLength < 80) return input.slice(-maximumLength);
+  const marker = "\n... diagnostic output omitted ...\n";
+  const remaining = maximumLength - marker.length;
+  const headLength = Math.floor(remaining / 3);
+  return `${input.slice(0, headLength)}${marker}${input.slice(-(remaining - headLength))}`;
+}
+
 export function sanitizeValue(value: unknown, extraSecrets: readonly string[] = []): unknown {
   if (typeof value === "string") return sanitizeText(value, extraSecrets);
   if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, extraSecrets));

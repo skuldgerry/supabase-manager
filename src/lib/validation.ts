@@ -20,6 +20,7 @@ export const setupAdminSchema = z.object({
   email: z.email(),
   displayName: z.string().trim().min(1).max(100),
   password: strongPassword,
+  organizationName: z.string().trim().min(2).max(100),
 });
 
 export const loginSchema = z.object({

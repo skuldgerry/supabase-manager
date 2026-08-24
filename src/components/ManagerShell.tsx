@@ -58,25 +58,37 @@ function Brand() {
   return <div className="brand-lockup"><span className="brand-mark">⌁</span><span>Supabase Manager</span></div>;
 }
 
-function AuthScreen({ mode, onSwitch }: { mode: 'setup' | 'login'; onSwitch: () => void }) {
+function AuthScreen({ mode }: { mode: 'setup' | 'login' }) {
   const setup = mode === 'setup';
   const [state, formAction, pending] = useActionState(setup ? setupAdminAction : loginAction, {});
+  const [showPassword, setShowPassword] = useState(false);
   return (
     <main className="auth-screen">
-      <form className="auth-card" action={formAction}>
-        <Brand />
-        <div className="eyebrow">{setup ? 'Welcome' : 'Secure workspace'}</div>
-        <h1>{setup ? 'Set up your manager' : 'Welcome back'}</h1>
-        <p>{setup ? 'Create the first administrator account. This account controls every organization and project on this server.' : 'Sign in to manage your self-hosted Supabase projects.'}</p>
-        {setup && <div className="notice"><span className="notice-icon">✦</span><div><strong>Local-first by design</strong>This manager does not send your project data or credentials to a third party.</div></div>}
-        {setup && <div className="field"><label>Full name</label><input name="displayName" autoComplete="name" placeholder="Alex Morgan" required /></div>}
-        <div className="field"><label>Email address</label><input name="email" type="email" autoComplete="email" placeholder="you@example.com" required /></div>
-        <div className="field"><label>Password</label><div className="input-wrap"><input name="password" type="password" autoComplete={setup ? 'new-password' : 'current-password'} placeholder="At least 12 characters" required /><button type="button" aria-label="Show password">◉</button></div>{setup && <small>Use a unique password. Two-factor authentication can be added later.</small>}</div>
-        {setup && <div className="field"><label>Confirm password</label><input name="confirmPassword" type="password" autoComplete="new-password" placeholder="Repeat your password" required /></div>}
-        {state.error && <div className="form-error" role="alert">{state.error}</div>}
-        <button className="btn btn-primary btn-wide" disabled={pending}>{pending ? 'Please wait…' : setup ? 'Create administrator account' : 'Sign in'}</button>
-        <p style={{ margin: '23px 0 0', textAlign: 'center', fontSize: 12 }}>{setup ? <>Already have an account? <button type="button" className="btn-link" onClick={onSwitch}>Sign in</button></> : <>First time here? <button type="button" className="btn-link" onClick={onSwitch}>Set up this manager</button></>}</p>
-      </form>
+      <section className="auth-form-panel">
+        <header className="auth-brand"><Brand /></header>
+        <div className="auth-form-wrap">
+          <form className="auth-card" action={formAction}>
+            <h1>{setup ? 'Set up Studio' : 'Welcome back'}</h1>
+            <p>{setup ? 'Create your admin account and first organization to get started.' : 'Sign in to manage your organizations and Supabase projects.'}</p>
+            {setup && <div className="field"><label htmlFor="setup-display-name">Full name</label><input id="setup-display-name" name="displayName" autoComplete="name" placeholder="Alex Morgan" required /></div>}
+            {setup && <div className="field"><label htmlFor="setup-organization-name">Organization name</label><input id="setup-organization-name" name="organizationName" defaultValue="Default Organization" autoComplete="organization" required /></div>}
+            <div className="field"><label htmlFor="manager-email">Email</label><input id="manager-email" name="email" type="email" autoComplete="email" placeholder="you@example.com" required /></div>
+            <div className="field"><label htmlFor="manager-password">Password</label><div className="input-wrap"><input id="manager-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete={setup ? 'new-password' : 'current-password'} placeholder={setup ? 'Min. 12 characters' : 'Your password'} required /><button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? 'Hide' : 'Show'}</button></div></div>
+            {setup && <div className="field"><label htmlFor="setup-confirm-password">Confirm password</label><input id="setup-confirm-password" name="confirmPassword" type={showPassword ? 'text' : 'password'} autoComplete="new-password" placeholder="Repeat your password" required /></div>}
+            {state.error && <div className="form-error" role="alert">{state.error}</div>}
+            <button className="btn btn-primary btn-wide" disabled={pending}>{pending ? 'Please wait…' : setup ? 'Create admin account' : 'Sign in'}</button>
+          </form>
+        </div>
+        <footer className="auth-footer">Self-hosted control plane for official Supabase stacks.</footer>
+      </section>
+      <aside className="auth-hero" aria-label="Supabase Manager">
+        <a className="auth-docs" href="https://github.com/skuldgerry/supabase-manager" target="_blank" rel="noreferrer">Documentation</a>
+        <div className="auth-hero-content">
+          <span className="auth-hero-mark" aria-hidden="true">⌁</span>
+          <h2>Supabase Manager</h2>
+          <p>Self-hosted, multi-organization Supabase Studio.<br />Manage isolated official stacks from one interface.</p>
+        </div>
+      </aside>
     </main>
   );
 }
@@ -374,8 +386,7 @@ export default function ManagerShell({ initialScreen, user, organizations, proje
   const [organizationId, setOrganizationId] = useState(organizations[0]?.id ?? '');
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? '');
   const [orgMenu, setOrgMenu] = useState(false);
-  const [authMode, setAuthMode] = useState<'setup' | 'login'>(initialScreen === 'login' ? 'login' : 'setup');
-  if (screen === 'setup' || screen === 'login' || !user) return <AuthScreen mode={authMode} onSwitch={() => setAuthMode(authMode === 'setup' ? 'login' : 'setup')} />;
+  if (screen === 'setup' || screen === 'login' || !user) return <AuthScreen mode={initialScreen === 'login' ? 'login' : 'setup'} />;
   if (organizations.length === 0) return <main className="auth-screen"><div className="auth-card"><Brand /><div className="eyebrow">First organization</div><h1>Create your workspace</h1><p>Projects and access permissions are grouped inside organizations.</p><form action={createOrganizationAction}><div className="field"><label>Organization name</label><input name="name" placeholder="Acme Labs" required /></div><button className="btn btn-primary btn-wide">Create organization</button></form><form action={logoutAction}><button className="btn btn-link btn-wide" style={{ marginTop: 18 }}>Sign out</button></form></div></main>;
   const organization = organizations.find((item) => item.id === organizationId) ?? organizations[0]!;
   const organizationProjects = projects.filter((project) => project.organizationId === organization.id);

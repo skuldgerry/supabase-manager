@@ -45,14 +45,17 @@ export async function setupAdminAction(
     email: formString(formData, "email"),
     displayName: formString(formData, "displayName"),
     password: formString(formData, "password"),
+    organizationName: formString(formData, "organizationName") || "Default Organization",
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid administrator details." };
 
   try {
-    const user = repository.createFirstAdmin({
+    const { user } = repository.bootstrapControlPlane({
       email: parsed.data.email,
       displayName: parsed.data.displayName,
       passwordHash: await hashPassword(parsed.data.password),
+      organizationName: parsed.data.organizationName,
+      organizationSlug: slugify(parsed.data.organizationName),
     });
     await createSessionForUser(user);
   } catch {

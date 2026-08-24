@@ -230,6 +230,10 @@ function mapCredential(row: CredentialRow): EncryptedCredential {
 }
 
 export interface CreateFirstAdminInput { readonly email: string; readonly displayName: string; readonly passwordHash: string; }
+export interface BootstrapControlPlaneInput extends CreateFirstAdminInput {
+  readonly organizationName: string;
+  readonly organizationSlug: string;
+}
 export interface CreateSessionInput { readonly userId: UserId; readonly tokenHash: string; readonly expiresAt: Timestamp; }
 export interface BootstrapHostInput { readonly name?: string; readonly dockerSocketPath?: string; }
 export interface CreateOrganizationInput { readonly name: string; readonly slug: string; readonly createdBy: UserId; }
@@ -269,6 +273,43 @@ export class ControlPlaneRepository {
       const userId = id<UserId>();
       this.db.prepare("INSERT INTO users (id, email, display_name, password_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").run(userId, email(input.email), required(input.displayName, "displayName"), required(input.passwordHash, "passwordHash"), created, created);
       return mapUser(this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow);
+    }).immediate();
+  }
+
+  /**
+   * Creates the first manager account and its initial organization together.
+   *
+   * The organization is part of initial setup rather than a second UI step so
+   * a successful login always has a workspace context. The transaction also
+   * means a failure while creating the organization or owner membership cannot
+   * leave a partially initialized control plane behind.
+   */
+  public bootstrapControlPlane(input: BootstrapControlPlaneInput): {
+    user: User;
+    organization: Organization;
+    ownerMembership: OrganizationMembership;
+  } {
+    const timestamp = now();
+    return this.db.transaction(() => {
+      if (this.isSetupComplete()) throw new Error("setup is already complete");
+
+      const userId = id<UserId>();
+      this.db.prepare("INSERT INTO users (id, email, display_name, password_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)")
+        .run(userId, email(input.email), required(input.displayName, "displayName"), required(input.passwordHash, "passwordHash"), timestamp, timestamp);
+
+      const organizationId = id<OrganizationId>();
+      this.db.prepare("INSERT INTO organizations (id, name, slug, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(organizationId, required(input.organizationName, "organizationName"), slug(input.organizationSlug), userId, timestamp, timestamp);
+
+      const membershipId = id<MembershipId>();
+      this.db.prepare("INSERT INTO organization_memberships (id, organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, 'owner', ?, ?)")
+        .run(membershipId, organizationId, userId, timestamp, timestamp);
+
+      return {
+        user: mapUser(this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow),
+        organization: mapOrganization(this.db.prepare("SELECT * FROM organizations WHERE id = ?").get(organizationId) as OrganizationRow),
+        ownerMembership: mapMembership(this.db.prepare("SELECT * FROM organization_memberships WHERE id = ?").get(membershipId) as MembershipRow),
+      };
     }).immediate();
   }
 

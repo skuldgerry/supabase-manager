@@ -38,7 +38,9 @@ export const ENVOY_PG17_ADAPTER = Object.freeze({
   mounts: [
     { service: "studio", purpose: "snippets", target: "/app/snippets" },
     { service: "studio", purpose: "functions", target: "/app/edge-functions", readOnly: true },
-    { service: "api-gw", purpose: "envoy", target: "/etc/envoy", readOnly: true },
+    // The official Envoy entrypoint renders lds.yaml into this directory at
+    // startup, so the seeded configuration volume must remain writable.
+    { service: "api-gw", purpose: "envoy", target: "/etc/envoy" },
     { service: "storage", purpose: "storage", target: "/var/lib/storage" },
     { service: "imgproxy", purpose: "storage", target: "/var/lib/storage" },
     { service: "functions", purpose: "functions", target: "/home/deno/functions" },
@@ -57,7 +59,7 @@ export const KONG_ADAPTER = Object.freeze({
   services: ENVOY_PG17_ADAPTER.services.map((service) => service === "api-gw" ? "kong" : service),
   gatewayEntrypoint: ["/bin/sh", "/home/kong/kong-entrypoint.sh"],
   mounts: ENVOY_PG17_ADAPTER.mounts.map((mount) => mount.service === "api-gw"
-    ? { ...mount, service: "kong", target: "/home/kong" }
+    ? { ...mount, service: "kong", target: "/home/kong", readOnly: true }
     : mount),
 } satisfies StackReleaseAdapter);
 

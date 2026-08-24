@@ -8,7 +8,7 @@ import { decryptJson, encryptJson, getMasterKey, type EncryptedEnvelope } from "
 import { adapterForRelease } from "./adapters";
 import { DirectCommandRunner } from "./command-runner";
 import { generateComposeOverride } from "./compose";
-import { sanitizeText } from "./diagnostics";
+import { boundedDiagnosticText, sanitizeText } from "./diagnostics";
 import { DockerCliHostDriver } from "./docker-driver";
 import { dockerProjectName, projectContainerName } from "./naming";
 import { asProjectId, type CommandRunner } from "./types";
@@ -46,6 +46,26 @@ function safeReleasePath(release: string): string {
 
 function trimUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+export function projectPublicEnvironment(project: {
+  readonly id: string;
+  readonly name: string;
+  readonly publicUrl: string;
+  readonly siteUrl: string;
+  readonly dashboardUsername: string;
+}): Record<string, string> {
+  return {
+    DASHBOARD_USERNAME: project.dashboardUsername,
+    SUPABASE_PUBLIC_URL: trimUrl(project.publicUrl),
+    // GoTrue appends its own /auth/v1 routes. The official stack expects the
+    // externally reachable gateway root here, not the Auth endpoint.
+    API_EXTERNAL_URL: trimUrl(project.publicUrl),
+    SITE_URL: trimUrl(project.siteUrl),
+    STUDIO_DEFAULT_PROJECT: project.name,
+    STUDIO_DEFAULT_ORGANIZATION: "Managed locally",
+    POOLER_TENANT_ID: project.id.replaceAll("-", ""),
+  };
 }
 
 export function versionAtLeast(actual: string, minimum: string): boolean {
@@ -95,7 +115,7 @@ export function legacyJwt(secret: string, role: "anon" | "service_role", issuedA
 
 async function runChecked(runner: CommandRunner, executable: string, args: readonly string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<void> {
   const result = await runner.run({ executable, args, cwd: options.cwd, timeoutMs: options.timeoutMs ?? 10 * 60_000 });
-  if (result.exitCode !== 0) throw new Error(`${executable} failed with exit code ${result.exitCode}: ${sanitizeText(result.stderr).slice(0, 800)}`);
+  if (result.exitCode !== 0) throw new Error(`${executable} failed with exit code ${result.exitCode}: ${boundedDiagnosticText(sanitizeText(result.stderr))}`);
 }
 
 async function prepareOfficialRelease(runner: CommandRunner, release: string, releaseCacheDir: string): Promise<string> {
@@ -330,15 +350,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
           SERVICE_ROLE_KEY: legacyJwt(custom.jwtSecret, "service_role", issuedAt),
         });
       }
-      envContents = patchEnv(envContents, {
-        DASHBOARD_USERNAME: project.dashboardUsername,
-        SUPABASE_PUBLIC_URL: trimUrl(project.publicUrl),
-        API_EXTERNAL_URL: `${trimUrl(project.publicUrl)}/auth/v1`,
-        SITE_URL: trimUrl(project.siteUrl),
-        STUDIO_DEFAULT_PROJECT: project.name,
-        STUDIO_DEFAULT_ORGANIZATION: "Managed locally",
-        POOLER_TENANT_ID: project.id.replaceAll("-", ""),
-      });
+      envContents = patchEnv(envContents, projectPublicEnvironment(project));
       await writeFile(envPath, envContents, { mode: 0o600 });
       // This official helper derives ES256/JWKS and opaque API keys from the
       // selected JWT secret and updates the per-project Compose copy.
@@ -426,9 +438,20 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     repository.appendJobEvent({ jobId: job.id, stage: "ready", level: "info", message: "Project is ready and passed functional checks" });
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Unknown provisioning failure";
-    const message = sanitizeText(raw, secrets).slice(0, 1000);
+    const message = boundedDiagnosticText(sanitizeText(raw, secrets));
     repository.updateProjectStatus(project.id, "failed");
-    repository.releaseProjectPorts(project.id);
+    // A failed Compose run may still leave created/running containers behind.
+    // Keep their held ports active so another project cannot be assigned the
+    // same host bindings. If Docker cannot be inspected, preserving the ports
+    // is the safer outcome.
+    let hasProjectContainers = true;
+    try {
+      hasProjectContainers = (await driver.listContainers({ "com.supabase-manager.project-id": project.id })).length > 0;
+    } catch {
+      // Docker failure is already represented by the provisioning error.
+    }
+    if (hasProjectContainers) repository.activateProjectPorts(project.id);
+    else repository.releaseProjectPorts(project.id);
     repository.updateJobState(job.id, { status: "failed", errorCode: "PROVISIONING_FAILED", errorMessage: message });
     repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
   } finally {

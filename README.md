@@ -32,7 +32,7 @@ generates only the project environment and named-volume override.
 Use the published image with [compose.yml](./compose.yml). The manager requires
 a Linux Docker Engine and access to its Docker socket.
 
-The current development image is `skuldgerry/supabase-manager:0.1.1-dev`.
+The current development image is `skuldgerry/supabase-manager:0.1.2-dev`.
 Development tags are published for testing and do not move `latest`.
 
 ```sh

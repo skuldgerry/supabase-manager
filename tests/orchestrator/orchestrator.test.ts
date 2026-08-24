@@ -6,14 +6,16 @@ import {
   dockerProjectName,
   ENVOY_PG17_ADAPTER,
   adapterForRelease,
+  boundedDiagnosticText,
   generateComposeOverride,
+  parseDockerConfiguredPorts,
   parseDockerPublishedPorts,
   PortReservationRegistry,
   sanitizeDiagnostic,
   sortOfficialReleases,
   volumePlan,
 } from "../../src/lib/orchestrator/index.js";
-import { legacyJwt, patchEnv, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
+import { legacyJwt, patchEnv, projectPublicEnvironment, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
 
 const projectId = asProjectId("11111111-1111-4111-8111-111111111111");
 
@@ -61,6 +63,14 @@ test("override replaces bind mounts and keeps official internal ports", () => {
   assert.doesNotMatch(output, /8000:18100/);
 });
 
+test("official gateway mounts match their entrypoint write requirements", () => {
+  const envoyMount = ENVOY_PG17_ADAPTER.mounts.find((mount) => mount.service === "api-gw");
+  const kongMount = adapterForRelease("self-hosted/v0.7.2").mounts.find((mount) => mount.service === "kong");
+  assert.equal(envoyMount?.target, "/etc/envoy");
+  assert.equal(envoyMount?.readOnly, undefined);
+  assert.equal(kongMount?.readOnly, true);
+});
+
 test("recent official release tags select their version-compatible gateway adapter", () => {
   assert.equal(adapterForRelease("self-hosted/v0.7.2").release, "self-hosted/v0.7.2");
   assert.equal(adapterForRelease("self-hosted/v0.7.2").gatewayService, "kong");
@@ -78,6 +88,24 @@ test("Docker published port discovery handles IPv4, IPv6, and JSON formatted out
     "0.0.0.0:55100->6543/tcp",
   ].join("\n");
   assert.deepEqual([...parseDockerPublishedPorts(output)].sort((a, b) => a - b), [3000, 8100, 54321, 55100]);
+});
+
+test("Docker configured port discovery includes created and restarting containers", () => {
+  const output = [
+    `"running"\t${JSON.stringify({ "3000/tcp": [{ HostIp: "", HostPort: "3000" }] })}`,
+    `"restarting"\t${JSON.stringify({ "8000/tcp": [{ HostIp: "", HostPort: "8100" }] })}`,
+    `"created"\t${JSON.stringify({ "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "54100" }] })}`,
+    `"exited"\t${JSON.stringify({ "6543/tcp": [{ HostIp: "", HostPort: "55100" }] })}`,
+  ].join("\n");
+  assert.deepEqual([...parseDockerConfiguredPorts(output)].sort((a, b) => a - b), [3000, 8100, 54100]);
+});
+
+test("bounded diagnostics retain the command context and final Docker error", () => {
+  const output = boundedDiagnosticText(`compose progress ${"x".repeat(5_000)} final failure: read-only file system`, 300);
+  assert.match(output, /^compose progress/);
+  assert.match(output, /diagnostic output omitted/);
+  assert.match(output, /final failure: read-only file system$/);
+  assert.equal(output.length, 300);
 });
 
 test("diagnostic sanitization redacts values but preserves useful context", () => {
@@ -110,6 +138,20 @@ test("dotenv updates replace known values and append new official keys", () => {
   assert.match(output, /^JWT_SECRET=new-value$/m);
   assert.match(output, /^SUPABASE_PUBLIC_URL=http:\/\/localhost:8100$/m);
   assert.doesNotMatch(output, /JWT_SECRET=old/);
+});
+
+test("official Auth receives the gateway root as its external URL", () => {
+  const environment = projectPublicEnvironment({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Customer portal",
+    publicUrl: "https://supabase.example.com/",
+    siteUrl: "https://app.example.com/",
+    dashboardUsername: "studio-admin",
+  });
+  assert.equal(environment.SUPABASE_PUBLIC_URL, "https://supabase.example.com");
+  assert.equal(environment.API_EXTERNAL_URL, "https://supabase.example.com");
+  assert.equal(environment.SITE_URL, "https://app.example.com");
+  assert.doesNotMatch(environment.API_EXTERNAL_URL, /\/auth\/v1$/);
 });
 
 test("Compose version checks handle v-prefixed and major releases", () => {

@@ -1,6 +1,6 @@
 services:
   manager:
-    image: skuldgerry/supabase-manager:0.1.1-dev
+    image: skuldgerry/supabase-manager:0.1.2-dev
     restart: unless-stopped
     environment:
       NODE_ENV: production

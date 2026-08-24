@@ -19,6 +19,48 @@ test("first-admin creation is one-time and setup survives lookup", () => {
   closeDatabase(db);
 });
 
+test("initial bootstrap creates the admin, default organization, and owner membership atomically", () => {
+  const db = openDatabase();
+  const repository = new ControlPlaneRepository(db);
+  const bootstrapped = repository.bootstrapControlPlane({
+    email: "Owner@Example.com",
+    displayName: "Owner",
+    passwordHash: "argon2-hash",
+    organizationName: "Default Organization",
+    organizationSlug: "default-organization",
+  });
+
+  assert.equal(repository.isSetupComplete(), true);
+  assert.equal(repository.getUserByEmail("owner@example.com")?.id, bootstrapped.user.id);
+  assert.deepEqual(repository.listOrganizations(bootstrapped.user.id).map((org) => org.id), [bootstrapped.organization.id]);
+  assert.equal(bootstrapped.ownerMembership.userId, bootstrapped.user.id);
+  assert.equal(bootstrapped.ownerMembership.organizationId, bootstrapped.organization.id);
+  assert.equal(bootstrapped.ownerMembership.role, "owner");
+  assert.throws(() => repository.bootstrapControlPlane({
+    email: "second@example.com",
+    displayName: "Second",
+    passwordHash: "hash",
+    organizationName: "Another",
+    organizationSlug: "another",
+  }), /already complete/);
+  closeDatabase(db);
+});
+
+test("initial bootstrap rolls back the admin when organization creation fails", () => {
+  const db = openDatabase();
+  const repository = new ControlPlaneRepository(db);
+  assert.throws(() => repository.bootstrapControlPlane({
+    email: "owner@example.com",
+    displayName: "Owner",
+    passwordHash: "argon2-hash",
+    organizationName: " ",
+    organizationSlug: "default-organization",
+  }), /organizationName is required/);
+  assert.equal(repository.isSetupComplete(), false);
+  assert.equal(repository.getUserByEmail("owner@example.com"), null);
+  closeDatabase(db);
+});
+
 test("sessions can be looked up by hash and revoked", () => {
   const { db, repository, admin } = fixture();
   const session = repository.createSession({ userId: admin.id, tokenHash: "token-hash", expiresAt: new Date(Date.now() + 60_000).toISOString() });
