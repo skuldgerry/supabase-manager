@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supabase Studio Multi-Head — Manage multiple Supabase projects from one dashboard</title>
+  <meta name="description" content="Run and manage multiple isolated Supabase projects from a single self-hosted dashboard. No Supabase Cloud account needed." />
+  <meta property="og:title" content="Supabase Studio Multi-Head" />
+  <meta property="og:description" content="Run and manage multiple isolated Supabase projects from a single self-hosted dashboard. No cloud account needed." />
+  <meta property="og:type" content="website" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2a2e45;
+      --green: #3ecf8e;
+      --green-dim: #1a3d2b;
+      --text: #ededed;
+      --muted: #8b92a5;
+      --code-bg: #111827;
+      --radius: 10px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a { color: var(--green); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .container { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+      position: sticky; top: 0;
+      background: rgba(15,17,23,0.92);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+    }
+    nav .inner {
+      max-width: 860px; margin: 0 auto; padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-logo { font-weight: 700; font-size: 15px; color: var(--text); }
+    .nav-logo span { color: var(--green); }
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a { color: var(--muted); font-size: 14px; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* Hero */
+    .hero { padding: 80px 0 64px; text-align: center; }
+    .badge {
+      display: inline-block;
+      background: var(--green-dim); color: var(--green);
+      font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+      text-transform: uppercase; padding: 4px 14px;
+      border-radius: 999px; margin-bottom: 24px;
+      border: 1px solid rgba(62,207,142,0.2);
+    }
+    h1 {
+      font-size: clamp(28px, 5vw, 46px);
+      font-weight: 800; line-height: 1.15;
+      letter-spacing: -0.02em; margin-bottom: 20px;
+    }
+    h1 em { font-style: normal; color: var(--green); }
+    .hero-sub {
+      font-size: 18px; color: var(--muted);
+      max-width: 560px; margin: 0 auto 36px;
+    }
+    .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 24px; border-radius: var(--radius);
+      font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: opacity .15s;
+    }
+    .btn:hover { opacity: .85; text-decoration: none; }
+    .btn-primary { background: var(--green); color: #061a0e; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+    /* Sections */
+    .section { padding: 56px 0; border-top: 1px solid var(--border); }
+    .section-label {
+      font-size: 12px; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--green); margin-bottom: 12px;
+    }
+    h2 { font-size: 28px; font-weight: 700; margin-bottom: 14px; letter-spacing: -0.01em; }
+    p { color: var(--muted); margin-bottom: 14px; font-size: 15px; }
+    p:last-child { margin-bottom: 0; }
+
+    /* Feature cards */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px; margin-top: 32px;
+    }
+    .feature-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 22px;
+    }
+    .feature-icon { font-size: 22px; margin-bottom: 10px; }
+    .feature-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .feature-card p { font-size: 14px; margin: 0; }
+
+    /* Steps */
+    .steps { margin-top: 28px; display: flex; flex-direction: column; gap: 12px; }
+    .step {
+      display: flex; gap: 16px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 22px; align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+      background: var(--green-dim); color: var(--green);
+      font-weight: 700; font-size: 13px;
+      display: flex; align-items: center; justify-content: center; margin-top: 1px;
+      border: 1px solid rgba(62,207,142,0.25);
+    }
+    .step-body h3 { font-size: 15px; font-weight: 600; margin-bottom: 3px; color: var(--text); }
+    .step-body p { font-size: 14px; margin: 0; }
+
+    /* Code */
+    .code-wrap {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 22px;
+      margin-top: 20px; overflow-x: auto;
+    }
+    pre { font-family: 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.75; color: #a0e8c0; }
+    .comment { color: #4a5568; }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; margin-top: 24px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th {
+      text-align: left; padding: 10px 16px;
+      background: var(--surface2); border: 1px solid var(--border);
+      font-weight: 600; color: var(--text);
+    }
+    td { padding: 10px 16px; border: 1px solid var(--border); color: var(--muted); }
+    td:first-child { color: var(--text); font-weight: 500; }
+    .yes { color: var(--green); font-weight: 600; }
+    .no { color: #4a5568; }
+
+    /* Audience */
+    .audience-list { list-style: none; margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+    .audience-list li { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; color: var(--muted); }
+    .audience-list li::before { content: "→"; color: var(--green); flex-shrink: 0; font-weight: 700; }
+
+    /* Pricing */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px; margin-top: 32px;
+    }
+    .pricing-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 28px 24px;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+    .pricing-card.highlighted { border-color: rgba(62,207,142,0.4); }
+    .pricing-card.enterprise  { border-color: rgba(167,139,250,0.4); }
+    .pricing-tier { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .pricing-tier.t-free     { color: var(--muted); }
+    .pricing-tier.t-business { color: var(--green); }
+    .pricing-tier.t-enterprise { color: #a78bfa; }
+    .pricing-price { font-size: 32px; font-weight: 800; color: var(--text); line-height: 1; }
+    .pricing-price span { font-size: 14px; font-weight: 400; color: var(--muted); }
+    .pricing-desc { font-size: 13px; color: var(--muted); margin: 0; }
+    .pricing-features { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .pricing-features li { font-size: 13px; color: var(--muted); display: flex; gap: 8px; }
+    .pricing-features li::before { content: "✓"; color: var(--green); font-weight: 700; flex-shrink: 0; }
+    .pricing-features li.dim::before { color: #4a5568; content: "–"; }
+    .pricing-features li.dim { color: #4a5568; }
+    .pricing-cta {
+      margin-top: auto; display: inline-flex; align-items: center; justify-content: center;
+      padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: opacity .15s; text-decoration: none;
+    }
+    .pricing-cta:hover { opacity: .85; text-decoration: none; }
+    .pricing-cta.c-free     { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .pricing-cta.c-business { background: var(--green); color: #061a0e; }
+    .pricing-cta.c-enterprise { background: #a78bfa; color: #1a0a2e; }
+    .arr-note {
+      margin-top: 20px; padding: 14px 18px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); font-size: 13px; color: var(--muted);
+    }
+    .arr-note strong { color: var(--text); }
+
+    /* CTA bottom */
+    .cta-bottom { padding: 72px 0; text-align: center; border-top: 1px solid var(--border); }
+    .cta-bottom h2 { margin-bottom: 12px; }
+    .cta-bottom p { margin-bottom: 28px; }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border); padding: 24px 0;
+      text-align: center; font-size: 13px; color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="inner">
+    <span class="nav-logo">Supabase <span>Multi-Head</span></span>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#minimal">Components</a>
+      <a href="#backups">Backups</a>
+      <a href="#migrate">Migrate</a>
+      <a href="#pocketbase">PocketBase</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="badge">Self-Hosted · Open Core</div>
+    <h1>Manage <em>multiple Supabase projects</em><br>from one dashboard</h1>
+    <p class="hero-sub">
+      A drop-in upgrade to Supabase Studio that lets you spin up, manage, and monitor
+      multiple isolated Supabase <em>and</em> PocketBase projects — all from a single
+      self-hosted UI. No Supabase Cloud account. No per-project dashboards.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#quickstart">Get started in 30 seconds</a>
+      <a class="btn btn-outline" href="#pricing">See pricing</a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="section-label">The problem</div>
+    <h2>Self-hosting Supabase is great.<br>Until you need a second project.</h2>
+    <p>
+      The official self-hosted Supabase stack is built for a single project. Want a staging
+      environment, a client project, or a separate database? You're stuck spinning up a whole
+      new Docker stack manually and juggling multiple dashboards — or paying Supabase Cloud $25+
+      per project per month.
+    </p>
+    <p>
+      Multi-Head Studio fixes this. It replaces the standard Studio container with one that can
+      create and manage additional Supabase stacks on demand, straight from the UI you already know.
+    </p>
+  </div>
+</section>
+
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-label">Features</div>
+    <h2>Everything you need, nothing you don't</h2>
+    <div class="features">
+      <div class="feature-card">
+        <div class="feature-icon">🗂️</div>
+        <h3>Multiple projects, one UI</h3>
+        <p>Create and switch between isolated Supabase projects without leaving the dashboard.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🐳</div>
+        <h3>No Docker-in-Docker</h3>
+        <p>Uses the host Docker socket to launch sibling containers. Clean and production-safe.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔒</div>
+        <h3>Credential isolation</h3>
+        <p>Each project gets its own Postgres password, JWT secret, anon key, and service key — generated fresh.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <h3>Drop-in upgrade</h3>
+        <p>Already running Supabase self-hosted? One command replaces only the Studio container. Your data stays untouched.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <h3>Import remote stacks</h3>
+        <p>Register existing Supabase deployments on other hosts and browse them from one place.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">☁️</div>
+        <h3>Migrate from Cloud</h3>
+        <p>Dump your Supabase Cloud database and restore it into any self-hosted project — directly from the UI or CLI. No manual <code style="font-size:12px;">pg_dump</code> wrangling.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💾</div>
+        <h3>Automated backups</h3>
+        <p>Schedule daily or weekly pg_dump backups per project. Download, restore, or delete any backup from the UI or CLI — no extra tooling needed.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🪶</div>
+        <h3>Modular components</h3>
+        <p>Enable only what you need. Realtime, Storage, Edge Functions, and the connection pooler are all opt-in via Docker Compose profiles — no YAML editing required.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🗄️</div>
+        <h3>Embedded projects</h3>
+        <p>Create a new Postgres database inside an existing project's instance — no extra containers, minimal overhead.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <h3>PocketBase projects</h3>
+        <p>Spin up a PocketBase backend (SQLite, REST API, auth, realtime, file storage) as a Docker Compose stack or plain <code style="font-size:12px;">docker run</code> container.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔄</div>
+        <h3>PocketBase migration</h3>
+        <p>Bi-directional data migration between PocketBase and Supabase. Move collections to tables or tables to collections — from the UI or CLI.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔐</div>
+        <h3>Authelia 2FA / SSO</h3>
+        <p>Optional two-factor authentication and single sign-on in front of Studio via Authelia — one overlay file, no code changes.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>Standby &amp; failover <span style="font-size:11px;color:var(--green);font-weight:600;">BUSINESS</span></h3>
+        <p>Provision warm standbys and trigger failover with one click. WAL streaming replication included.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🏗️</div>
+        <h3>Cluster mode <span style="font-size:11px;color:#a78bfa;font-weight:600;">ENTERPRISE</span></h3>
+        <p>One writable master with read replicas. Auto-promotes the highest-priority healthy replica on failure.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="section-label">How it works</div>
+    <h2>Port blocks. No manual config.</h2>
+    <p>
+      Each new project gets a port block automatically offset by +10. Studio writes a project
+      registry to disk and launches a full Supabase stack as a sibling Docker Compose project.
+      No YAML editing, no port hunting.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Default project</th><th>2nd project</th><th>3rd project</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Kong (HTTP)</td><td>8000</td><td>8010</td><td>8020</td></tr>
+          <tr><td>Postgres</td><td>5432</td><td>5442</td><td>5452</td></tr>
+          <tr><td>Pooler</td><td>6543</td><td>6553</td><td>6563</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="minimal">
+  <div class="container">
+    <div class="section-label">Optional components</div>
+    <h2>Run only what you need</h2>
+    <p>
+      The <code>docker-compose.minimal.yml</code> overlay converts every optional service to opt-in.
+      Start lean and add components back with a single <code>--profile</code> flag — no config file editing.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Profile</th><th>Enables</th><th>Skip when…</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>realtime</code></td><td>Realtime WebSocket subscriptions</td><td>Your app doesn't use <code>supabase-js</code> subscriptions</td></tr>
+          <tr><td><code>storage</code></td><td>Storage API + imgproxy</td><td>Your app doesn't store files</td></tr>
+          <tr><td><code>edge-functions</code></td><td>Edge Functions (Deno runtime)</td><td>You don't use Edge Functions</td></tr>
+          <tr><td><code>pooler</code></td><td>Supavisor (ports 5432 / 6543)</td><td>You connect directly to Postgres</td></tr>
+          <tr><td><code>analytics</code></td><td>Logflare + Vector log pipeline</td><td>You don't need the Studio Logs tab</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="code-wrap">
+<pre><span class="comment"># Core only — minimal footprint</span>
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.minimal.yml \
+  up -d
+
+<span class="comment"># Core + storage + realtime (typical app stack)</span>
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.minimal.yml \
+  --profile storage \
+  --profile realtime \
+  up -d
+
+<span class="comment"># Print the right command for your selection</span>
+smh overlay storage realtime
+
+<span class="comment"># Add Nginx + Authelia 2FA (replaces plain nginx)</span>
+smh proxy nginx-authelia</pre>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="backups">
+  <div class="container">
+    <div class="section-label">Backups</div>
+    <h2>Scheduled pg_dump backups, zero config</h2>
+    <p>
+      Every project gets its own backup schedule. Multi-Head Studio runs <code>pg_dump</code>
+      inside the project's Postgres container on your chosen interval and stores the compressed
+      dump file on the host. No cron jobs to write, no extra tools to install.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Open Project Settings → Backups</h3>
+          <p>Each project has its own backup page. Set the schedule to <strong>Daily</strong> or <strong>Weekly</strong>, or trigger a backup on demand with <strong>Run backup now</strong>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Browse and download</h3>
+          <p>All backups are listed with size and timestamp. Download any backup as a <code>.pgdump</code> file for off-site archiving.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>One-click restore</h3>
+          <p>Pick any backup and click <strong>Restore</strong>. The dump is piped back through <code>pg_restore</code> inside the container. A confirmation dialog guards against accidental overwrites.</p>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top:20px;margin-bottom:8px;font-size:14px;">Or use the CLI:</p>
+    <div class="code-wrap">
+<pre><span class="comment"># List backups and current schedule for a project</span>
+smh backup list &lt;ref&gt;
+
+<span class="comment"># Trigger a backup now</span>
+smh backup run &lt;ref&gt;
+
+<span class="comment"># Set a daily automatic schedule</span>
+smh backup schedule &lt;ref&gt; daily
+
+<span class="comment"># Restore from a specific backup (--confirm required)</span>
+smh backup restore &lt;ref&gt; &lt;filename&gt; --confirm
+
+<span class="comment"># Download a backup to disk</span>
+smh backup download &lt;ref&gt; &lt;filename&gt; --out ./my-backup.pgdump</pre>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="migrate">
+  <div class="container">
+    <div class="section-label">Migrate from Cloud</div>
+    <h2>Leave Supabase Cloud in minutes</h2>
+    <p>
+      Multi-Head Studio can dump any Supabase Cloud database and restore it into a
+      self-hosted project in a single operation. It runs <code>pg_dump</code> inside the
+      target project's Postgres container — no extra tools to install, no intermediate files.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Open Projects → Import from Cloud</h3>
+          <p>A new tab in the Projects page. Paste your cloud database's direct connection string (find it under <em>Project Settings → Database → Connection string → URI</em>).</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Pick a target project and schemas</h3>
+          <p>Select which self-hosted project to restore into. Default is the <code>public</code> schema; you can include <code>auth</code> to also migrate user accounts.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Confirm and watch the live log</h3>
+          <p>A real-time log streams pg_dump and psql output as the migration runs. Done in seconds for small databases, minutes for large ones.</p>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top:20px;margin-bottom:8px;font-size:14px;">Or use the CLI:</p>
+    <div class="code-wrap">
+<pre><span class="comment"># Migrate schema + data (public schema)</span>
+smh migrate &lt;ref&gt; \
+  --source "postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
+
+<span class="comment"># Schema only — no row data</span>
+smh migrate &lt;ref&gt; --source "postgresql://..." --schema-only
+
+<span class="comment"># Include auth users as well</span>
+smh migrate &lt;ref&gt; --source "postgresql://..." --schemas public,auth</pre>
+    </div>
+
+    <p style="margin-top:16px;font-size:13px;color:var(--muted);">
+      ⚠ Use the <strong>direct</strong> connection URL (<code>db.&lt;ref&gt;.supabase.co:5432</code>), not the pooler URL.
+      The target project must be running before migrating. Existing objects in the selected schemas will be dropped and recreated.
+    </p>
+  </div>
+</section>
+
+<section class="section" id="pocketbase">
+  <div class="container">
+    <div class="section-label">PocketBase</div>
+    <h2>Add PocketBase projects alongside Supabase</h2>
+    <p>
+      PocketBase is a self-contained backend — SQLite database, REST API, auth, realtime, and
+      file storage — that runs as a single binary. Multi-Head Studio manages PocketBase projects
+      the same way it manages Supabase projects: spin up, monitor, migrate, and delete from one UI.
+    </p>
+
+    <div class="table-wrap" style="margin-bottom:28px;">
+      <table>
+        <thead>
+          <tr><th>Mode</th><th>How it runs</th><th>Best for</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pocketbase</code></td>
+            <td>Docker Compose stack</td>
+            <td>Full isolation; own port, own container, own volume</td>
+          </tr>
+          <tr>
+            <td><code>pocketbase-embedded</code></td>
+            <td>Plain <code>docker run</code></td>
+            <td>Lighter footprint; no Compose project overhead</td>
+          </tr>
+          <tr>
+            <td><code>pocketbase-embedded --target &lt;ref&gt;</code></td>
+            <td>Collection namespace inside an existing PocketBase</td>
+            <td>Zero containers; logical sub-project sharing one PB instance</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-bottom:8px;font-size:14px;">Create PocketBase projects via the UI or CLI:</p>
+    <div class="code-wrap">
+<pre><span class="comment"># Full PocketBase stack (Docker Compose)</span>
+smh create "my-pb" --mode pocketbase
+
+<span class="comment"># Lightweight PocketBase (plain docker run)</span>
+smh create "my-pb" --mode pocketbase-embedded
+
+<span class="comment"># Collection namespace inside an existing PocketBase project</span>
+smh create "my-ns" --mode pocketbase-embedded --target &lt;ref&gt;</pre>
+    </div>
+
+    <h3 style="margin-top:32px;margin-bottom:12px;font-size:18px;font-weight:700;">Bi-directional data migration</h3>
+    <p>
+      Move data between PocketBase and Supabase in either direction. Collections map to Postgres
+      tables; types are converted automatically. Run a live migration from
+      <strong>Project Settings → PocketBase → Migrate</strong> or the CLI.
+    </p>
+    <div class="code-wrap">
+<pre><span class="comment"># PocketBase → Supabase (collections → tables)</span>
+smh pb-migrate &lt;ref&gt; \
+  --direction pb-to-supa \
+  --pb-url http://localhost:8090 \
+  --pb-email admin@example.com \
+  --pb-password mypassword
+
+<span class="comment"># Supabase → PocketBase (tables → collections)</span>
+smh pb-migrate &lt;ref&gt; \
+  --direction supa-to-pb \
+  --pb-url http://localhost:8090 \
+  --pb-email admin@example.com \
+  --pb-password mypassword
+
+<span class="comment"># Poll a running migration job</span>
+smh pb-migrate status &lt;ref&gt; --job &lt;job-id&gt;</pre>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="quickstart">
+  <div class="container">
+    <div class="section-label">Quickstart</div>
+    <h2>Up and running in 30 seconds</h2>
+    <p>Prerequisites: Docker Engine ≥ 24 with the Compose plugin.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Grab the multihead folder</h3>
+          <p>Sparse checkout — no full monorepo clone needed.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Run <code>bash start.sh</code></h3>
+          <p>Auto-generates secrets, detects your OS and Docker bridge IP, starts all services.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Open <code>http://localhost:8000</code></h3>
+          <p>Your multi-head Studio is live. Hit "New project" to spin up a second Supabase stack.</p>
+        </div>
+      </div>
+    </div>
+    <div class="code-wrap">
+<pre><span class="comment"># Fresh install — no existing Supabase needed</span>
+git clone --filter=blob:none --sparse \
+  https://github.com/flamingrubberduck/supabase-studio-multi-head.git
+cd supabase-studio-multi-head
+git sparse-checkout set multihead
+cd multihead &amp;&amp; bash start.sh</pre>
+    </div>
+    <p style="margin-top:16px;font-size:14px;">
+      Already self-hosting Supabase?
+      <a href="https://github.com/flamingrubberduck/supabase-studio-multi-head#readme">See the upgrade guide →</a>
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="section-label">Who is this for</div>
+    <h2>Built for self-hosters who need more</h2>
+    <ul class="audience-list">
+      <li>Developers running multiple client or side projects on a single server</li>
+      <li>Teams wanting staging + production environments without paying Cloud prices</li>
+      <li>Anyone moving off Supabase Cloud and needing a smooth migration path</li>
+      <li>Anyone who wants full ownership of their data with no vendor lock-in</li>
+      <li>Ops engineers who want standby and failover without a managed database service</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="section-label">Comparison</div>
+    <h2>vs. Supabase Cloud &amp; standard self-host</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Feature</th><th>Supabase Cloud</th><th>Standard self-host</th><th>Multi-Head Studio</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Multiple projects</td>
+            <td class="yes">✓ $25+/project</td>
+            <td class="no">Manual only</td>
+            <td class="yes">✓ from UI</td>
+          </tr>
+          <tr>
+            <td>Self-hosted</td>
+            <td class="no">✗</td>
+            <td class="yes">✓</td>
+            <td class="yes">✓</td>
+          </tr>
+          <tr>
+            <td>Single dashboard</td>
+            <td class="yes">✓</td>
+            <td class="no">One per stack</td>
+            <td class="yes">✓</td>
+          </tr>
+          <tr>
+            <td>Standby / failover</td>
+            <td class="yes">✓ Pro plan</td>
+            <td class="no">✗</td>
+            <td class="yes">✓ Business+</td>
+          </tr>
+          <tr>
+            <td>Read replica cluster</td>
+            <td class="yes">✓ Pro plan</td>
+            <td class="no">✗</td>
+            <td class="yes">✓ Enterprise</td>
+          </tr>
+          <tr>
+            <td>Database backups (UI + CLI)</td>
+            <td class="yes">✓ managed</td>
+            <td class="no">Manual</td>
+            <td class="yes">✓ built-in</td>
+          </tr>
+          <tr>
+            <td>Migrate from Cloud (UI + CLI)</td>
+            <td class="no">✗ manual only</td>
+            <td class="no">✗ manual only</td>
+            <td class="yes">✓ built-in</td>
+          </tr>
+          <tr>
+            <td>Embedded projects (shared Postgres)</td>
+            <td class="no">✗</td>
+            <td class="no">✗</td>
+            <td class="yes">✓ built-in</td>
+          </tr>
+          <tr>
+            <td>PocketBase projects (UI + CLI)</td>
+            <td class="no">✗</td>
+            <td class="no">✗</td>
+            <td class="yes">✓ built-in</td>
+          </tr>
+          <tr>
+            <td>PocketBase ↔ Supabase migration</td>
+            <td class="no">✗</td>
+            <td class="no">✗</td>
+            <td class="yes">✓ built-in</td>
+          </tr>
+          <tr>
+            <td>Data ownership</td>
+            <td class="no">Vendor hosted</td>
+            <td class="yes">✓</td>
+            <td class="yes">✓</td>
+          </tr>
+          <tr>
+            <td>2FA / SSO (Authelia)</td>
+            <td class="no">✗</td>
+            <td class="no">✗ manual setup</td>
+            <td class="yes">✓ overlay</td>
+          </tr>
+          <tr>
+            <td>Monthly cost</td>
+            <td>$25+ per project</td>
+            <td class="yes">Your server only</td>
+            <td class="yes">Your server only</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pricing">
+  <div class="container">
+    <div class="section-label">Pricing</div>
+    <h2>Free to start. Scale when you need to.</h2>
+    <div class="pricing-grid">
+
+      <!-- Free -->
+      <div class="pricing-card">
+        <div>
+          <div class="pricing-tier t-free">Free</div>
+          <div class="pricing-price" style="margin:10px 0 6px;">$0</div>
+          <p class="pricing-desc">For individuals and teams under $2M ARR.</p>
+        </div>
+        <ul class="pricing-features">
+          <li>Unlimited projects from the UI</li>
+          <li>Full Supabase Studio interface</li>
+          <li>Embedded &amp; PocketBase project modes</li>
+          <li>PocketBase ↔ Supabase migration</li>
+          <li>Import &amp; browse remote stacks</li>
+          <li>Scheduled pg_dump backups (UI + CLI)</li>
+          <li>Migrate from Supabase Cloud (UI + CLI)</li>
+          <li>Self-hosted on your own server</li>
+          <li class="dim">Failover &amp; standby</li>
+          <li class="dim">Read replica cluster</li>
+          <li class="dim">Support SLA</li>
+        </ul>
+        <a class="pricing-cta c-free" href="#quickstart">Get started free</a>
+      </div>
+
+      <!-- Business -->
+      <div class="pricing-card highlighted">
+        <div>
+          <div class="pricing-tier t-business">Business</div>
+          <div class="pricing-price" style="margin:10px 0 6px;">$299 <span>/ mo</span></div>
+          <p class="pricing-desc">For growing teams that need high availability.</p>
+        </div>
+        <ul class="pricing-features">
+          <li>Everything in Free</li>
+          <li>Warm standby provisioning</li>
+          <li>One-click manual failover</li>
+          <li>Auto-failover on health failures</li>
+          <li>WAL streaming replication</li>
+          <li>Email support &amp; 48 h SLA</li>
+          <li class="dim">Read replica cluster</li>
+          <li class="dim">Dedicated engineer</li>
+        </ul>
+        <a class="pricing-cta c-business" href="mailto:nautilux2@gmail.com?subject=Business license">Get a license key</a>
+      </div>
+
+      <!-- Enterprise -->
+      <div class="pricing-card enterprise">
+        <div>
+          <div class="pricing-tier t-enterprise">Enterprise</div>
+          <div class="pricing-price" style="margin:10px 0 6px;">$1,200 <span>/ mo</span></div>
+          <p class="pricing-desc">For teams that need full cluster orchestration and dedicated support.</p>
+        </div>
+        <ul class="pricing-features">
+          <li>Everything in Business</li>
+          <li>Read replica cluster mode</li>
+          <li>Cluster-level auto-failover</li>
+          <li>Multi-host replica placement</li>
+          <li>Dedicated engineer onboarding</li>
+          <li>24 / 7 support &amp; custom SLA</li>
+          <li>Custom invoicing &amp; MSA</li>
+        </ul>
+        <a class="pricing-cta c-enterprise" href="mailto:nautilux2@gmail.com?subject=Enterprise license">Contact us</a>
+      </div>
+
+    </div>
+    <div class="arr-note">
+      <strong>Free threshold:</strong> organizations with less than <strong>$2,000,000 USD ARR</strong> directly
+      attributable to products using Multi-Head Studio may use it at no charge.
+      See the <a href="https://github.com/flamingrubberduck/supabase-studio-multi-head/blob/master/LICENSE">LICENSE</a> for full terms.
+    </div>
+  </div>
+</section>
+
+<section class="cta-bottom">
+  <div class="container">
+    <h2>Ready to try it?</h2>
+    <p>One command. No cloud account. Full control.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#quickstart">Get started free →</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      Not affiliated with Supabase Inc.
+      &nbsp;·&nbsp;
+      <a href="https://github.com/flamingrubberduck/supabase-studio-multi-head">GitHub</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/flamingrubberduck/supabase-studio-multi-head/blob/master/LICENSE">License</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
