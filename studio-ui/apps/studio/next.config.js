@@ -35,6 +35,7 @@ const nextConfig = {
   output: 'standalone',
   experimental: {
     clientRouterFilter: false,
+    webpackBuildWorker: true,
     webpackMemoryOptimizations: true,
   },
   async rewrites() {
@@ -600,6 +601,24 @@ const nextConfig = {
         as: '*.js',
       },
     },
+  },
+  webpack: (config) => {
+    config.module.rules.push(
+      {
+        test: /\.md$/,
+        use: ['raw-loader'],
+      },
+      {
+        test: /edge-runtime\.d\.ts$/,
+        use: ['raw-loader'],
+      },
+      {
+        test: /lib\.deno\.d\.ts$/,
+        use: ['raw-loader'],
+      }
+    )
+
+    return config
   },
   onDemandEntries: {
     maxInactiveAge: 24 * 60 * 60 * 1000,
