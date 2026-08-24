@@ -603,6 +603,15 @@ const nextConfig = {
     },
   },
   webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@/public/deno/edge-runtime.d.ts$': path.resolve(
+        __dirname,
+        'public/deno/edge-runtime.d.ts'
+      ),
+      '@/public/deno/lib.deno.d.ts$': path.resolve(__dirname, 'public/deno/lib.deno.d.ts'),
+    }
+
     config.module.rules.push(
       {
         test: /\.md$/,
