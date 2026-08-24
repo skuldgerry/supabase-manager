@@ -16,19 +16,23 @@ The manager does not proxy project traffic. Each project publishes its own API
 and database pooler ports, so you can keep them local or place your own reverse
 proxy in front of individual projects.
 
-## Current release adapter
+## Official release adapters
 
-The first adapter pins Supabase `self-hosted/v0.8.0`, whose official Compose
-stack uses Envoy and PostgreSQL 17. Image versions remain owned by that upstream
-release; the manager generates only a project environment and named-volume
-override.
+The project wizard reads Supabase's official self-hosted tags and offers the
+latest three, with the latest selected by default. `self-hosted/v0.8.0` uses
+the current Envoy/PostgreSQL 17 adapter; the preceding `v0.7.x` releases use
+their version-compatible Kong adapter. A custom official `self-hosted/vX.Y.Z`
+tag can also be entered and is structurally validated before provisioning.
+
+Image versions remain owned by the selected upstream release. The manager
+generates only the project environment and named-volume override.
 
 ## Run
 
 Use the published image with [compose.yml](./compose.yml). The manager requires
 a Linux Docker Engine and access to its Docker socket.
 
-The current development image is `skuldgerry/supabase-manager:0.1.0-dev`.
+The current development image is `skuldgerry/supabase-manager:0.1.1-dev`.
 Development tags are published for testing and do not move `latest`.
 
 ```sh

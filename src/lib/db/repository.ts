@@ -315,6 +315,16 @@ export class ControlPlaneRepository {
     return (this.db.prepare("SELECT * FROM hosts ORDER BY name").all() as HostRow[]).map(mapHost);
   }
 
+  public listReservedPorts(hostId?: HostId): readonly number[] {
+    const timestamp = now();
+    this.db.prepare("UPDATE port_reservations SET status = 'released', released_at = ? WHERE status = 'held' AND expires_at IS NOT NULL AND expires_at <= ?")
+      .run(timestamp, timestamp);
+    const rows = hostId
+      ? this.db.prepare("SELECT DISTINCT port FROM port_reservations WHERE host_id = ? AND status IN ('held', 'active') ORDER BY port").all(hostId)
+      : this.db.prepare("SELECT DISTINCT port FROM port_reservations WHERE status IN ('held', 'active') ORDER BY port").all();
+    return (rows as Array<{ port: number }>).map((row) => row.port);
+  }
+
   public createOrganization(input: CreateOrganizationInput): { organization: Organization; ownerMembership: OrganizationMembership } {
     const timestamp = now();
     return this.db.transaction(() => {

@@ -1,21 +1,20 @@
 services:
   manager:
-    image: ${SUPABASE_MANAGER_IMAGE:-skuldgerry/supabase-manager:0.1.0-dev}
+    image: skuldgerry/supabase-manager:0.1.1-dev
     restart: unless-stopped
     environment:
       NODE_ENV: production
       MANAGER_DATA_DIR: /data
-      MANAGER_PORT: ${MANAGER_PORT:-3000}
-      MANAGER_BIND_ADDRESS: ${MANAGER_BIND_ADDRESS:-0.0.0.0}
-      MANAGER_PUBLIC_URL: ${MANAGER_PUBLIC_URL:-http://localhost:3000}
-      MANAGER_MASTER_KEY: ${MANAGER_MASTER_KEY:-}
+      MANAGER_PORT: 3000
+      MANAGER_BIND_ADDRESS: 0.0.0.0
+      MANAGER_PUBLIC_URL: http://localhost:3000
       DOCKER_SOCKET_PATH: /var/run/docker.sock
-      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      SESSION_TTL_HOURS: 24
     ports:
-      - "${MANAGER_BIND_ADDRESS:-0.0.0.0}:${MANAGER_PORT:-3000}:${MANAGER_PORT:-3000}"
+      - "3000:3000"
     volumes:
       - manager-data:/data
-      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:
         - CMD-SHELL

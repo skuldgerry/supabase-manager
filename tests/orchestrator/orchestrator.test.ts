@@ -5,9 +5,12 @@ import {
   defaultPorts,
   dockerProjectName,
   ENVOY_PG17_ADAPTER,
+  adapterForRelease,
   generateComposeOverride,
+  parseDockerPublishedPorts,
   PortReservationRegistry,
   sanitizeDiagnostic,
+  sortOfficialReleases,
   volumePlan,
 } from "../../src/lib/orchestrator/index.js";
 import { legacyJwt, patchEnv, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
@@ -33,10 +36,10 @@ test("port reservations are atomic and reusable after release", async () => {
 });
 
 test("override replaces bind mounts and keeps official internal ports", () => {
-  const volumes = volumePlan(projectId, "v1.2.3");
+  const volumes = volumePlan(projectId, "self-hosted/v0.8.0");
   const output = generateComposeOverride({
     projectId,
-    release: "v1.2.3",
+    release: "self-hosted/v0.8.0",
     ports: { api: 18100, dbSession: 18101, dbTransaction: 18102 },
     volumes,
     mounts: [
@@ -56,6 +59,25 @@ test("override replaces bind mounts and keeps official internal ports", () => {
   assert.match(output, /realtime-dev\.sm_/);
   assert.match(output, /com\.supabase-manager\.project-id/);
   assert.doesNotMatch(output, /8000:18100/);
+});
+
+test("recent official release tags select their version-compatible gateway adapter", () => {
+  assert.equal(adapterForRelease("self-hosted/v0.7.2").release, "self-hosted/v0.7.2");
+  assert.equal(adapterForRelease("self-hosted/v0.7.2").gatewayService, "kong");
+  assert.equal(adapterForRelease("self-hosted/v0.8.0").gatewayService, "api-gw");
+  assert.throws(() => adapterForRelease("main"), /Unsupported official Supabase release/);
+  assert.deepEqual(sortOfficialReleases([
+    "self-hosted/v0.7.1", "self-hosted/v0.8.0", "self-hosted/v0.7.2",
+  ]), ["self-hosted/v0.8.0", "self-hosted/v0.7.2", "self-hosted/v0.7.1"]);
+});
+
+test("Docker published port discovery handles IPv4, IPv6, and JSON formatted output", () => {
+  const output = [
+    JSON.stringify("0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp"),
+    JSON.stringify("127.0.0.1:8100->8000/tcp, 0.0.0.0:54321->5432/tcp"),
+    "0.0.0.0:55100->6543/tcp",
+  ].join("\n");
+  assert.deepEqual([...parseDockerPublishedPorts(output)].sort((a, b) => a - b), [3000, 8100, 54321, 55100]);
 });
 
 test("diagnostic sanitization redacts values but preserves useful context", () => {

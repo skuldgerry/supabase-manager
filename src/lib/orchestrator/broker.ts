@@ -123,6 +123,33 @@ async function prepareOfficialRelease(runner: CommandRunner, release: string, re
   return dockerDir;
 }
 
+async function validateOfficialReleaseLayout(dockerDir: string, adapter: ReturnType<typeof adapterForRelease>): Promise<void> {
+  const composeContents = await readFile(path.join(dockerDir, "docker-compose.yml"), "utf8");
+  const missingServices = adapter.services.filter((service) => !new RegExp(`^  ${service}:\\s*$`, "m").test(composeContents));
+  const requiredPaths = [
+    ".env.example",
+    "utils/generate-keys.sh",
+    "utils/add-new-auth-keys.sh",
+    ...(adapter.gatewayService === "api-gw"
+      ? ["volumes/api/envoy"]
+      : ["volumes/api/kong.yml", "volumes/api/kong-entrypoint.sh"]),
+    "volumes/pooler",
+    "volumes/functions",
+    "volumes/snippets",
+    "volumes/db/roles.sql",
+    "volumes/db/jwt.sql",
+  ];
+  const missingPaths = (await Promise.all(requiredPaths.map(async (relativePath) =>
+    await exists(path.join(dockerDir, relativePath)) ? null : relativePath))).filter(Boolean);
+  if (missingServices.length > 0 || missingPaths.length > 0) {
+    const details = [
+      missingServices.length ? `services: ${missingServices.join(", ")}` : "",
+      missingPaths.length ? `files: ${missingPaths.join(", ")}` : "",
+    ].filter(Boolean).join("; ");
+    throw new Error(`Official release ${adapter.release} is not compatible with its manager adapter (${details})`);
+  }
+}
+
 async function loadEncryptedCredential<T>(projectId: DomainProjectId, name: string): Promise<T | undefined> {
   const stored = getRepository().getCredential(projectId, name);
   if (!stored) return undefined;
@@ -171,7 +198,7 @@ async function buildDbInitTree(upstream: string, target: string): Promise<void> 
   }
 }
 
-async function seedConfigurationVolumes(runner: CommandRunner, volumes: readonly PlannedVolume[], upstream: string, projectDir: string): Promise<void> {
+async function seedConfigurationVolumes(runner: CommandRunner, volumes: readonly PlannedVolume[], upstream: string, projectDir: string, adapter: ReturnType<typeof adapterForRelease>): Promise<void> {
   const seedRoot = path.join(projectDir, "seed");
   await rm(seedRoot, { recursive: true, force: true });
   await mkdir(seedRoot, { recursive: true, mode: 0o700 });
@@ -179,7 +206,15 @@ async function seedConfigurationVolumes(runner: CommandRunner, volumes: readonly
   const dbInit = path.join(seedRoot, "db_init");
   await buildDbInitTree(upstream, dbInit);
   sources.set("db_init", dbInit);
-  sources.set("envoy", path.join(upstream, "volumes", "api", "envoy"));
+  if (adapter.gatewayService === "api-gw") {
+    sources.set("envoy", path.join(upstream, "volumes", "api", "envoy"));
+  } else {
+    const gateway = path.join(seedRoot, "gateway");
+    await mkdir(gateway, { recursive: true });
+    await copyFile(path.join(upstream, "volumes", "api", "kong.yml"), path.join(gateway, "temp.yml"));
+    await copyFile(path.join(upstream, "volumes", "api", "kong-entrypoint.sh"), path.join(gateway, "kong-entrypoint.sh"));
+    sources.set("envoy", gateway);
+  }
   sources.set("pooler", path.join(upstream, "volumes", "pooler"));
   sources.set("functions", path.join(upstream, "volumes", "functions"));
   sources.set("snippets", path.join(upstream, "volumes", "snippets"));
@@ -264,6 +299,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
 
     stage("preparing-release", `Preparing official Supabase ${project.stackRelease}`);
     const upstream = await prepareOfficialRelease(runner, project.stackRelease, config.releaseCacheDir);
+    await validateOfficialReleaseLayout(upstream, adapter);
     await mkdir(projectDir, { recursive: true, mode: 0o700 });
     const helperUpdatedCompose = path.join(projectDir, "docker-compose.yml");
     const credentialsReady = Boolean(repository.getCredential(project.id, "project-credentials"))
@@ -359,7 +395,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     // preserves everything that individual upstream bind mounts do not hide.
     await driver.compose({ ...compose, args: ["pull", "db"] });
     await driver.compose({ ...compose, args: ["create", "db"] });
-    await seedConfigurationVolumes(runner, volumes, upstream, projectDir);
+    await seedConfigurationVolumes(runner, volumes, upstream, projectDir, adapter);
 
     stage("pulling-images", "Pulling image versions pinned by the official Supabase release");
     await driver.compose({ ...compose, args: ["pull"] });
@@ -369,7 +405,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     const dbContainer = projectContainerName(orchestrationProjectId, "db");
     await waitForContainers(runner, [dbContainer]);
 
-    stage("starting-services", "Starting Auth, REST, Storage, Realtime, Studio, Envoy, and Supavisor");
+    stage("starting-services", `Starting Auth, REST, Storage, Realtime, Studio, ${adapter.gatewayService === "api-gw" ? "Envoy" : "Kong"}, and Supavisor`);
     await driver.compose({ ...compose, args: ["up", "--detach"] });
     await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
       ? `realtime-dev.${dockerProjectName(orchestrationProjectId)}_realtime`
@@ -392,6 +428,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     const raw = error instanceof Error ? error.message : "Unknown provisioning failure";
     const message = sanitizeText(raw, secrets).slice(0, 1000);
     repository.updateProjectStatus(project.id, "failed");
+    repository.releaseProjectPorts(project.id);
     repository.updateJobState(job.id, { status: "failed", errorCode: "PROVISIONING_FAILED", errorMessage: message });
     repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
   } finally {

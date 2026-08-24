@@ -50,7 +50,22 @@ export const ENVOY_PG17_ADAPTER = Object.freeze({
   ],
 } satisfies StackReleaseAdapter);
 
+export const KONG_ADAPTER = Object.freeze({
+  ...ENVOY_PG17_ADAPTER,
+  release: "self-hosted/v0.7.2",
+  gatewayService: "kong",
+  services: ENVOY_PG17_ADAPTER.services.map((service) => service === "api-gw" ? "kong" : service),
+  gatewayEntrypoint: ["/bin/sh", "/home/kong/kong-entrypoint.sh"],
+  mounts: ENVOY_PG17_ADAPTER.mounts.map((mount) => mount.service === "api-gw"
+    ? { ...mount, service: "kong", target: "/home/kong" }
+    : mount),
+} satisfies StackReleaseAdapter);
+
 export function adapterForRelease(release: string): StackReleaseAdapter {
-  if (release === ENVOY_PG17_ADAPTER.release) return ENVOY_PG17_ADAPTER;
-  throw new Error(`Unsupported official Supabase release: ${release}`);
+  if (!/^self-hosted\/v\d+\.\d+\.\d+$/.test(release)) {
+    throw new Error(`Unsupported official Supabase release: ${release}`);
+  }
+  const version = release.match(/v(\d+)\.(\d+)\.(\d+)$/)?.slice(1).map(Number) ?? [];
+  const base = (version[0] ?? 0) > 0 || (version[1] ?? 0) >= 8 ? ENVOY_PG17_ADAPTER : KONG_ADAPTER;
+  return Object.freeze({ ...base, release });
 }

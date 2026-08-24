@@ -44,7 +44,6 @@ function yamlScalar(value: string): string {
  */
 export function generateComposeOverride(options: ComposeOverrideOptions): string {
   const ports = validateProjectPorts(options.ports);
-  safeName(options.release, "release");
   const volumeByPurpose = new Map(options.volumes.map((volume) => [volume.purpose, volume.name]));
   const mounts = [...options.mounts].sort((a, b) => a.service.localeCompare(b.service) || a.target.localeCompare(b.target));
   for (const mount of mounts) {

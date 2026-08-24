@@ -8,3 +8,5 @@ export * from "./compose";
 export * from "./adapters";
 export * from "./provisioning";
 export * from "./diagnostics";
+export * from "./release-catalog";
+export * from "./port-discovery";

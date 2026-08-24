@@ -112,46 +112,218 @@ function Topbar({ title, organization, user, onHelp }: { title: string; organiza
   return <header className="topbar"><div className="breadcrumbs"><span>{organization.name}</span><span className="slash">/</span><strong>{title}</strong></div><div className="top-actions"><button className="icon-btn" aria-label="Help" onClick={onHelp}>?</button><button className="icon-btn" aria-label="Notifications">♢</button><span className="user-avatar">{initials}</span></div></header>;
 }
 
-function Dashboard({ organization, projects, onCreate, onCredentials, onSelect }: { organization: OrganizationSummary; projects: ProjectSummary[]; onCreate: () => void; onCredentials: () => void; onSelect: (projectId: string) => void }) {
-  const running = projects.filter((project) => project.status === 'ready').length;
+function Dashboard({ organization, projects, onCreate, onSelect }: { organization: OrganizationSummary; projects: ProjectSummary[]; onCreate: () => void; onSelect: (projectId: string) => void }) {
   return <>
-    <div className="page-heading"><div><div className="eyebrow">Organization overview</div><h1>Projects</h1><p>Deployments belonging to {organization.name} are managed from this workspace.</p></div><div className="heading-actions"><button className="btn btn-secondary" onClick={onCredentials} disabled={projects.length === 0}>View credentials</button><button className="btn btn-primary" onClick={onCreate}>＋ New project</button></div></div>
-    {projects.length === 0 && <div className="notice"><span className="notice-icon">✦</span><div><strong>Your organization is ready</strong>Create your first project to provision an isolated Supabase stack with named volumes and generated credentials.</div></div>}
-    <div className="stat-grid"><div className="stat-card"><div className="stat-label">Projects</div><div className="stat-value">{projects.length}</div></div><div className="stat-card"><div className="stat-label">Ready projects</div><div className="stat-value">{running}</div></div><div className="stat-card"><div className="stat-label">Organization role</div><div className="stat-value" style={{ fontSize: 17 }}>{organization.role}</div></div></div>
-    <section className="section-card"><div className="section-card-header"><div><h2>Projects</h2><p>Each project runs in its own network and named volumes.</p></div><span className="tiny">{projects.length} {projects.length === 1 ? 'project' : 'projects'}</span></div>{projects.length === 0 ? <div className="empty-state"><div className="empty-graphic">⌁</div><h2>No projects yet</h2><p>Projects are full Supabase deployments with their own database, Auth, Storage, Realtime, and Studio services.</p><button className="btn btn-primary" onClick={onCreate}>Create your first project</button></div> : <div className="section-card-body"><table className="project-table"><thead><tr><th>Project</th><th>Status</th><th>API endpoint</th><th>Release</th></tr></thead><tbody>{projects.map((project) => <tr key={project.id} tabIndex={0} onClick={() => onSelect(project.id)} onKeyDown={(event) => { if (event.key === 'Enter') onSelect(project.id); }}><td><div className="project-cell"><span className="project-icon">⌁</span><div><strong>{project.name}</strong><span>{project.id.slice(0, 8)}</span></div></div></td><td><span className={`status ${project.status === 'failed' ? 'red' : project.status !== 'ready' ? 'amber' : ''}`}><span className="status-dot" />{project.status}</span></td><td className="mono">{project.publicUrl}</td><td>{project.release}</td></tr>)}</tbody></table></div>}</section>
+    <div className="page-heading cloud-heading"><div><h1>Projects</h1><p>Manage your self-hosted Supabase projects in {organization.name}.</p></div><button className="btn btn-primary" onClick={onCreate}>＋ New project</button></div>
+    {projects.length === 0 ? <section className="section-card"><div className="empty-state"><div className="empty-graphic">⌁</div><h2>No projects yet</h2><p>Create an isolated official Supabase stack with its own database, Auth, Storage, Realtime, and Studio services.</p><button className="btn btn-primary" onClick={onCreate}>Create a new project</button></div></section> : <div className="project-grid">{projects.map((project) => {
+      const ready = project.status === 'ready';
+      return <article className="cloud-project-card" key={project.id}>
+        <div className="project-card-body"><div className="project-card-title"><span className={`health-dot ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`} /><h2>{project.name}</h2><button className="card-menu" aria-label={`Actions for ${project.name}`} onClick={() => onSelect(project.id)}>•••</button></div><div className="project-card-meta"><span className={`project-badge ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`}>{project.status}</span><code>{project.id.slice(0, 8)}</code></div><div className="service-list"><div><span className="health-dot" />API / {project.release.startsWith('self-hosted/v0.7.') ? 'Kong' : 'Envoy'} <code>:{project.apiPort}</code></div><div><span className="health-dot" />Session pooler <code>:{project.databaseSessionPort}</code></div><div><span className="health-dot" />Transaction pooler <code>:{project.databaseTransactionPort}</code></div><div><span className="release-dot" />{project.release}</div></div></div>
+        <div className="project-card-footer"><button className="btn btn-secondary" disabled={!ready} onClick={() => window.open(project.publicUrl, '_blank', 'noopener,noreferrer')}>Open Studio</button><button className="btn btn-secondary" onClick={() => onSelect(project.id)}>Credentials</button></div>
+      </article>;
+    })}</div>}
   </>;
+}
+
+type WizardOptions = {
+  managerPublicUrl: string;
+  releases: string[];
+  latestRelease: string;
+  suggested: { api: number; dbSession: number; dbTransaction: number };
+  conflicts: Array<{ field: 'api' | 'dbSession' | 'dbTransaction'; port: number; reason: 'manager' | 'docker' }>;
+  dockerAvailable: boolean;
+};
+
+type WizardValues = {
+  name: string;
+  release: string;
+  customRelease: string;
+  publicUrl: string;
+  siteUrl: string;
+  apiPort: string;
+  databaseSessionPort: string;
+  databaseTransactionPort: string;
+  dashboardUsername: string;
+  credentialsMode: 'generated' | 'custom';
+  postgresPassword: string;
+  dashboardPassword: string;
+  jwtSecret: string;
+};
+
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function directUrl(hostname: string, port: string, protocol = 'http:'): string {
+  const host = hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
+  return host ? `${protocol}//${host}:${port}` : '';
+}
+
+function generatedSecret(prefix: string, byteLength: number): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  const encoded = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  return `${prefix}1_${encoded}`;
 }
 
 function Wizard({ organization, step, setStep, onCancel }: { organization: OrganizationSummary; step: WizardStep; setStep: (step: WizardStep) => void; onCancel: () => void }) {
   const [state, formAction, pending] = useActionState(createProjectAction, {});
-  const [values, setValues] = useState({
-    name: '',
-    publicUrl: 'http://localhost:8100',
-    siteUrl: 'http://localhost:3000',
-    apiPort: '8100',
-    databaseSessionPort: '54100',
-    databaseTransactionPort: '55100',
-    dashboardUsername: 'admin',
-    credentialsMode: 'generated' as 'generated' | 'custom',
-    postgresPassword: '',
-    dashboardPassword: '',
-    jwtSecret: '',
+  const [options, setOptions] = useState<WizardOptions | null>(null);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [address, setAddress] = useState('');
+  const [urlLinkedToPort, setUrlLinkedToPort] = useState(true);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<WizardValues>({
+    name: '', release: '', customRelease: '', publicUrl: '', siteUrl: '', apiPort: '8100',
+    databaseSessionPort: '54100', databaseTransactionPort: '55100', dashboardUsername: 'admin',
+    credentialsMode: 'generated', postgresPassword: '', dashboardPassword: '', jwtSecret: '',
   });
-  const set = (key: keyof typeof values, value: string) => setValues((current) => ({ ...current, [key]: value }));
-  return <form className="wizard-shell" action={formAction}>
-    <input type="hidden" name="organizationId" value={organization.id} />
-    <input type="hidden" name="supabaseRelease" value="self-hosted/v0.8.0" />
-    {Object.entries(values).map(([key, value]) => <input key={key} type="hidden" name={key} value={value} />)}
-    <div className="page-heading"><div><div className="eyebrow">New project</div><h1>Create a project</h1><p>Configure your isolated Supabase deployment on this server.</p></div></div>
+  const set = <K extends keyof WizardValues>(key: K, value: WizardValues[K]) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/wizard/options', { cache: 'no-store' }).then(async (response) => {
+      if (!response.ok) throw new Error('Project defaults could not be loaded');
+      return response.json() as Promise<WizardOptions>;
+    }).then((loaded) => {
+      if (!active) return;
+      setOptions(loaded);
+      const configured = (() => { try { return new URL(loaded.managerPublicUrl); } catch { return null; } })();
+      const browserHost = isLoopback(window.location.hostname) ? '' : window.location.hostname;
+      const configuredHost = configured && !isLoopback(configured.hostname) ? configured.hostname : '';
+      const selectedHost = configuredHost || browserHost;
+      const protocol = configuredHost ? configured?.protocol : window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const apiPort = String(loaded.suggested.api);
+      const projectUrl = directUrl(selectedHost, apiPort, protocol || 'http:');
+      setAddress(selectedHost);
+      setValues((current) => ({
+        ...current,
+        release: loaded.latestRelease,
+        apiPort,
+        databaseSessionPort: String(loaded.suggested.dbSession),
+        databaseTransactionPort: String(loaded.suggested.dbTransaction),
+        publicUrl: projectUrl,
+        siteUrl: projectUrl,
+      }));
+    }).catch((error) => {
+      if (active) setFieldErrors({ options: error instanceof Error ? error.message : 'Project defaults could not be loaded' });
+    }).finally(() => { if (active) setLoadingOptions(false); });
+    return () => { active = false; };
+  }, []);
+
+  const addressChoices = (() => {
+    const choices = new Set<string>();
+    try {
+      const configuredHost = options ? new URL(options.managerPublicUrl).hostname : '';
+      if (configuredHost && !isLoopback(configuredHost)) choices.add(configuredHost);
+    } catch { /* Invalid configuration is reported by the server configuration parser. */ }
+    if (typeof window !== 'undefined' && !isLoopback(window.location.hostname)) choices.add(window.location.hostname);
+    if (address) choices.add(address);
+    return [...choices];
+  })();
+
+  const updateDirectUrl = (nextAddress: string, nextPort = values.apiPort) => {
+    setAddress(nextAddress);
+    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
+    const nextUrl = directUrl(nextAddress, nextPort, protocol);
+    setValues((current) => ({ ...current, publicUrl: nextUrl, siteUrl: current.siteUrl === current.publicUrl || !current.siteUrl ? nextUrl : current.siteUrl }));
+    setUrlLinkedToPort(true);
+  };
+
+  const refreshSuggestedPorts = async () => {
+    setLoadingOptions(true);
+    setFieldErrors({});
+    try {
+      const response = await fetch('/api/wizard/options', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Available ports could not be refreshed');
+      const loaded = await response.json() as WizardOptions;
+      setOptions(loaded);
+      const apiPort = String(loaded.suggested.api);
+      setValues((current) => ({
+        ...current,
+        apiPort,
+        databaseSessionPort: String(loaded.suggested.dbSession),
+        databaseTransactionPort: String(loaded.suggested.dbTransaction),
+        ...(() => {
+          if (!urlLinkedToPort) return { publicUrl: current.publicUrl, siteUrl: current.siteUrl };
+          const nextUrl = directUrl(address, apiPort, window.location.protocol === 'https:' ? 'https:' : 'http:');
+          return { publicUrl: nextUrl, siteUrl: current.siteUrl === current.publicUrl ? nextUrl : current.siteUrl };
+        })(),
+      }));
+    } catch (error) {
+      setFieldErrors({ ports: error instanceof Error ? error.message : 'Available ports could not be refreshed' });
+    } finally { setLoadingOptions(false); }
+  };
+
+  const continueFromDetails = () => {
+    const errors: Record<string, string> = {};
+    if (values.name.trim().length < 2) errors.name = 'Enter a project name with at least 2 characters.';
+    const release = values.release === 'custom' ? values.customRelease : values.release;
+    if (!/^self-hosted\/v\d+\.\d+\.\d+$/.test(release)) errors.release = 'Use an official tag such as self-hosted/v0.8.0.';
+    for (const [key, value] of [['publicUrl', values.publicUrl], ['siteUrl', values.siteUrl]] as const) {
+      try { new URL(value); } catch { errors[key] = 'Enter a complete URL including http:// or https://.'; }
+    }
+    setFieldErrors(errors);
+    if (Object.keys(errors).length === 0) setStep(2);
+  };
+
+  const continueFromPorts = async () => {
+    const portValues = {
+      api: Number(values.apiPort), dbSession: Number(values.databaseSessionPort), dbTransaction: Number(values.databaseTransactionPort),
+    };
+    const errors: Record<string, string> = {};
+    for (const [key, port] of Object.entries(portValues)) {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) errors[key] = 'Use a port between 1 and 65535.';
+    }
+    if (new Set(Object.values(portValues)).size !== 3) errors.ports = 'Each project endpoint needs a different host port.';
+    if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
+    setLoadingOptions(true);
+    try {
+      const query = new URLSearchParams(Object.entries(portValues).map(([key, value]) => [key, String(value)]));
+      const response = await fetch(`/api/wizard/options?${query}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error('Port availability could not be checked');
+      const loaded = await response.json() as WizardOptions;
+      setOptions(loaded);
+      for (const conflict of loaded.conflicts) errors[conflict.field] = `Port ${conflict.port} is already used by ${conflict.reason === 'docker' ? 'a Docker container' : 'another managed project'}.`;
+      if (!loaded.dockerAvailable) errors.ports = 'Docker port discovery is unavailable. Check the manager socket connection.';
+      setFieldErrors(errors);
+      if (Object.keys(errors).length === 0) setStep(3);
+    } catch (error) {
+      setFieldErrors({ ports: error instanceof Error ? error.message : 'Port availability could not be checked' });
+    } finally { setLoadingOptions(false); }
+  };
+
+  const customizeSecrets = () => setValues((current) => ({
+    ...current,
+    credentialsMode: 'custom',
+    postgresPassword: current.postgresPassword || generatedSecret('Pg', 24),
+    dashboardPassword: current.dashboardPassword || generatedSecret('Studio', 24),
+    jwtSecret: current.jwtSecret || generatedSecret('Jwt', 48),
+  }));
+  const selectedRelease = values.release === 'custom' ? values.customRelease : values.release;
+  const hiddenValues = { ...values, supabaseRelease: selectedRelease };
+
+  return <div className="wizard-shell">
+    <div className="page-heading"><div><div className="eyebrow">New project</div><h1>Create a new project</h1><p>Your project will run as an isolated official Supabase deployment.</p></div></div>
     <div className="wizard-progress">{[['1', 'Project details'], ['2', 'Ports & access'], ['3', 'Secrets']] .map(([number, label], index) => <div key={number} className={`step ${step > index + 1 ? 'done' : ''} ${step === index + 1 ? 'active' : ''}`}><span className="step-number">{step > index + 1 ? '✓' : number}</span><span>{label}</span>{index < 2 && <span className="step-line" />}</div>)}</div>
     <section className="wizard-panel">
-      {step === 1 && <><h2>Project details</h2><p>Give your deployment a recognizable name. It can be changed later without affecting the runtime.</p><div className="form-grid"><div className="field"><label>Project name</label><input value={values.name} onChange={(event) => set('name', event.target.value)} placeholder="e.g. Customer portal" required /></div><div className="field"><label>Official stack release</label><input value="self-hosted/v0.8.0" readOnly /><small>The first supported Envoy/Postgres 17 release adapter.</small></div><div className="field full"><label>Public project URL</label><input value={values.publicUrl} onChange={(event) => set('publicUrl', event.target.value)} placeholder="http://192.168.1.20:8100" required /><small>Use a local IP now or the final FQDN if one is already available.</small></div><div className="field full"><label>Default Auth site URL</label><input value={values.siteUrl} onChange={(event) => set('siteUrl', event.target.value)} placeholder="https://app.example.com" required /></div></div></>}
-      {step === 2 && <><h2>Ports & access</h2><p>Choose the host-facing ports for this project. Internal Supabase ports stay unchanged.</p><div className="form-grid"><div className="field"><label>API / Envoy port</label><input className="mono" inputMode="numeric" value={values.apiPort} onChange={(event) => set('apiPort', event.target.value)} /></div><div className="field"><label>Database session pooler</label><input className="mono" inputMode="numeric" value={values.databaseSessionPort} onChange={(event) => set('databaseSessionPort', event.target.value)} /></div><div className="field"><label>Database transaction pooler</label><input className="mono" inputMode="numeric" value={values.databaseTransactionPort} onChange={(event) => set('databaseTransactionPort', event.target.value)} /></div><div className="field"><label>Bind address</label><select defaultValue="0.0.0.0" disabled><option>0.0.0.0 — all interfaces</option></select></div></div><div className="warning">The manager reserves all three ports transactionally before provisioning begins.</div></>}
-      {step === 3 && <><h2>Secrets & dashboard access</h2><p>Credentials are encrypted at rest and remain retrievable from the project Credentials page.</p><label className={`secret-option ${values.credentialsMode === 'generated' ? 'selected' : ''}`}><input type="radio" checked={values.credentialsMode === 'generated'} onChange={() => set('credentialsMode', 'generated')} /><div><strong>Generate secure secrets</strong><span>Recommended. Version-aware Supabase helpers create compatible JWT keys and internal credentials.</span></div></label><label className={`secret-option ${values.credentialsMode === 'custom' ? 'selected' : ''}`}><input type="radio" checked={values.credentialsMode === 'custom'} onChange={() => set('credentialsMode', 'custom')} /><div><strong>Customize secrets</strong><span>Supply the database password, JWT secret, and dashboard password; dependent keys remain generated as a consistent bundle.</span></div></label><div className="form-grid" style={{ marginTop: 22 }}><div className="field"><label>Studio username</label><input value={values.dashboardUsername} onChange={(event) => set('dashboardUsername', event.target.value)} /></div>{values.credentialsMode === 'custom' && <><div className="field"><label>Studio password</label><input type="password" value={values.dashboardPassword} onChange={(event) => set('dashboardPassword', event.target.value)} /></div><div className="field"><label>PostgreSQL password</label><input type="password" value={values.postgresPassword} onChange={(event) => set('postgresPassword', event.target.value)} /></div><div className="field"><label>JWT secret</label><input type="password" value={values.jwtSecret} onChange={(event) => set('jwtSecret', event.target.value)} /></div></>}</div><div className="security-note">Credentials can be revealed and copied later by authorized organization administrators.</div></>}
-      {state.error && <div className="form-error" role="alert">{state.error}</div>}
-      <div className="wizard-footer"><button type="button" className="btn btn-secondary" onClick={() => step === 1 ? onCancel() : setStep((step - 1) as WizardStep)}>{step === 1 ? 'Cancel' : 'Back'}</button><div className="right">{step < 3 ? <button type="button" className="btn btn-primary" onClick={() => setStep((step + 1) as WizardStep)}>Continue</button> : <button className="btn btn-primary" disabled={pending}>{pending ? 'Queueing…' : 'Deploy project'}</button>}</div></div>
+      {step === 1 && <><h2>Project details</h2><p>Choose the release and the addresses Supabase will advertise to clients.</p><div className="form-grid">
+        <div className={`field ${fieldErrors.name ? 'invalid' : ''}`}><label>Project name</label><input value={values.name} onChange={(event) => set('name', event.target.value)} placeholder="Customer portal" autoFocus />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</div>
+        <div className={`field ${fieldErrors.release ? 'invalid' : ''}`}><label>Official stack release</label><select value={values.release} onChange={(event) => set('release', event.target.value)} disabled={loadingOptions}>{!options && <option value="">Loading releases…</option>}{options?.releases.map((release, index) => <option value={release} key={release}>{release}{index === 0 ? ' — Latest' : ''}</option>)}<option value="custom">Custom official tag…</option></select>{values.release === 'custom' && <input className="mono nested-input" value={values.customRelease} onChange={(event) => set('customRelease', event.target.value)} placeholder="self-hosted/v0.8.0" />}{fieldErrors.release && <small className="field-error">{fieldErrors.release}</small>}</div>
+        <div className="field full"><label>Server address</label><div className="address-row"><select value={address} onChange={(event) => updateDirectUrl(event.target.value)}><option value="">Enter manually</option>{addressChoices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select><input value={address} onChange={(event) => updateDirectUrl(event.target.value.trim())} placeholder="192.168.1.20 or supabase.example.com" /></div><small>The manager URL and the address used by this browser are offered here. Agent addresses will join this list when remote hosts are introduced.</small></div>
+        <div className={`field full ${fieldErrors.publicUrl ? 'invalid' : ''}`}><label>Public project URL</label><input className="mono" value={values.publicUrl} onChange={(event) => { set('publicUrl', event.target.value); setUrlLinkedToPort(false); }} placeholder="http://192.168.1.20:8100" /><small>{urlLinkedToPort ? 'Linked to the API gateway host port.' : 'Custom or reverse-proxied URL. The gateway host port remains independent.'}</small>{fieldErrors.publicUrl && <small className="field-error">{fieldErrors.publicUrl}</small>}</div>
+        <div className={`field full ${fieldErrors.siteUrl ? 'invalid' : ''}`}><label>Auth site URL</label><input className="mono" value={values.siteUrl} onChange={(event) => set('siteUrl', event.target.value)} placeholder="https://app.example.com" /><small>This is your application’s default Auth redirect URL—not the manager URL. The project URL is used initially so port 3000 is never assumed.</small>{fieldErrors.siteUrl && <small className="field-error">{fieldErrors.siteUrl}</small>}</div>
+      </div>{fieldErrors.options && <div className="form-error" role="alert">{fieldErrors.options}</div>}</>}
+      {step === 2 && <><div className="panel-title-row"><div><h2>Ports & access</h2><p>Suggested ports are calculated from manager reservations and live Docker bindings.</p></div><button type="button" className="btn btn-secondary" onClick={() => void refreshSuggestedPorts()} disabled={loadingOptions}>{loadingOptions ? 'Checking…' : 'Refresh suggestions'}</button></div><div className="form-grid">
+        <div className={`field ${fieldErrors.api ? 'invalid' : ''}`}><label>API / {selectedRelease.startsWith('self-hosted/v0.7.') ? 'Kong' : 'Envoy'} port</label><input className="mono" inputMode="numeric" value={values.apiPort} onChange={(event) => { const port = event.target.value; setValues((current) => { if (!urlLinkedToPort) return { ...current, apiPort: port }; const nextUrl = directUrl(address, port, window.location.protocol === 'https:' ? 'https:' : 'http:'); return { ...current, apiPort: port, publicUrl: nextUrl, siteUrl: current.siteUrl === current.publicUrl ? nextUrl : current.siteUrl }; }); }} />{fieldErrors.api && <small className="field-error">{fieldErrors.api}</small>}</div>
+        <div className={`field ${fieldErrors.dbSession ? 'invalid' : ''}`}><label>Database session pooler</label><input className="mono" inputMode="numeric" value={values.databaseSessionPort} onChange={(event) => set('databaseSessionPort', event.target.value)} />{fieldErrors.dbSession && <small className="field-error">{fieldErrors.dbSession}</small>}</div>
+        <div className={`field ${fieldErrors.dbTransaction ? 'invalid' : ''}`}><label>Database transaction pooler</label><input className="mono" inputMode="numeric" value={values.databaseTransactionPort} onChange={(event) => set('databaseTransactionPort', event.target.value)} />{fieldErrors.dbTransaction && <small className="field-error">{fieldErrors.dbTransaction}</small>}</div>
+        <div className="field"><label>Bind address</label><select value="0.0.0.0" disabled><option>0.0.0.0 — all interfaces</option></select></div>
+      </div><div className="endpoint-preview"><span>Public URL</span><code>{values.publicUrl || 'Enter a server address on the previous step'}</code>{!urlLinkedToPort && <button type="button" className="btn-link" onClick={() => updateDirectUrl(address)}>Link to gateway port</button>}</div>{fieldErrors.ports && <div className="form-error" role="alert">{fieldErrors.ports}</div>}<div className="warning">Ports are only reserved when you deploy. Opening or canceling this wizard does not consume them.</div></>}
+      {step === 3 && <form action={formAction}><input type="hidden" name="organizationId" value={organization.id} />{Object.entries(hiddenValues).map(([key, value]) => <input key={key} type="hidden" name={key} value={value} />)}<h2>Secrets & dashboard access</h2><p>Review how credentials will be created before deployment begins.</p><label className={`secret-option ${values.credentialsMode === 'generated' ? 'selected' : ''}`}><input type="radio" checked={values.credentialsMode === 'generated'} onChange={() => set('credentialsMode', 'generated')} /><div><strong>Generate secure secrets</strong><span>Recommended. The official release helpers generate a mutually compatible credential bundle.</span></div></label><label className={`secret-option ${values.credentialsMode === 'custom' ? 'selected' : ''}`}><input type="radio" checked={values.credentialsMode === 'custom'} onChange={customizeSecrets} /><div><strong>Customize secrets</strong><span>Secure generated values are pre-filled; change only the values you need.</span></div></label><div className="form-grid secrets-grid"><div className="field"><label>Studio username</label><input value={values.dashboardUsername} onChange={(event) => set('dashboardUsername', event.target.value)} /></div>{values.credentialsMode === 'custom' && <><div className="field"><label>Studio password</label><input type="text" className="mono" value={values.dashboardPassword} onChange={(event) => set('dashboardPassword', event.target.value)} /></div><div className="field"><label>PostgreSQL password</label><input type="text" className="mono" value={values.postgresPassword} onChange={(event) => set('postgresPassword', event.target.value)} /></div><div className="field"><label>JWT secret</label><input type="text" className="mono" value={values.jwtSecret} onChange={(event) => set('jwtSecret', event.target.value)} /></div></>}</div><div className="security-note">Credentials remain encrypted at rest and can be revealed or copied later by organization administrators.</div>{state.error && <div className="form-error form-error-spaced" role="alert">{state.error}</div>}<div className="wizard-footer"><button type="button" className="btn btn-secondary" onClick={() => setStep(2)}>Back</button><button type="submit" className="btn btn-primary" disabled={pending}>{pending ? 'Queueing…' : 'Deploy project'}</button></div></form>}
+      {step < 3 && <div className="wizard-footer"><button type="button" className="btn btn-secondary" onClick={() => step === 1 ? onCancel() : setStep(1)}>{step === 1 ? 'Cancel' : 'Back'}</button><button type="button" className="btn btn-primary" onClick={() => step === 1 ? continueFromDetails() : void continueFromPorts()} disabled={loadingOptions}>{loadingOptions ? 'Checking…' : 'Continue'}</button></div>}
     </section>
-  </form>;
+  </div>;
 }
 
 function Deployment({ job, onCredentials }: { job?: ActiveJobSummary; onCredentials: () => void }) {
@@ -207,7 +379,7 @@ export default function ManagerShell({ initialScreen, user, organizations, proje
   if (organizations.length === 0) return <main className="auth-screen"><div className="auth-card"><Brand /><div className="eyebrow">First organization</div><h1>Create your workspace</h1><p>Projects and access permissions are grouped inside organizations.</p><form action={createOrganizationAction}><div className="field"><label>Organization name</label><input name="name" placeholder="Acme Labs" required /></div><button className="btn btn-primary btn-wide">Create organization</button></form><form action={logoutAction}><button className="btn btn-link btn-wide" style={{ marginTop: 18 }}>Sign out</button></form></div></main>;
   const organization = organizations.find((item) => item.id === organizationId) ?? organizations[0]!;
   const organizationProjects = projects.filter((project) => project.organizationId === organization.id);
-  const title = screen === 'wizard' ? 'Create project' : screen === 'deployment' ? 'Deployment' : screen === 'credentials' ? 'Credentials' : 'Projects';
+  const title = screen === 'deployment' ? 'Deployment' : screen === 'credentials' ? 'Credentials' : 'Projects';
   const selectedProject = organizationProjects.find((project) => project.id === selectedProjectId) ?? organizationProjects[0];
-  return <div className="app-shell"><Sidebar screen={screen} setScreen={setScreen} organization={organization} user={user} onOrgMenu={() => setOrgMenu(!orgMenu)} />{orgMenu && <div className="switcher-menu">{organizations.map((org) => <button className={org.id === organization.id ? 'active' : ''} key={org.id} onClick={() => { setOrganizationId(org.id); setSelectedProjectId(projects.find((project) => project.organizationId === org.id)?.id ?? ''); setOrgMenu(false); setScreen('dashboard'); }}>{org.id === organization.id ? '✓ ' : ''}{org.name}</button>)}<form action={createOrganizationAction}><input name="name" placeholder="New organization" required /><button>＋ Create organization</button></form></div>}<main className="main"><Topbar title={title} organization={organization} user={user} onHelp={() => window.alert('Need help? Check the deployment diagnostics or project documentation.')} /><div className="content">{screen === 'dashboard' && <Dashboard organization={organization} projects={organizationProjects} onCreate={() => { setWizardStep(1); setScreen('wizard'); }} onCredentials={() => setScreen('credentials')} onSelect={(projectId) => { setSelectedProjectId(projectId); setScreen('credentials'); }} />}{screen === 'wizard' && <Wizard organization={organization} step={wizardStep} setStep={setWizardStep} onCancel={() => setScreen('dashboard')} />}{screen === 'deployment' && <Deployment job={activeJob} onCredentials={() => { if (activeJob?.projectId) setSelectedProjectId(activeJob.projectId); setScreen('credentials'); }} />}{screen === 'credentials' && <Credentials project={selectedProject} />}</div></main></div>;
+  return <div className="app-shell"><Sidebar screen={screen} setScreen={setScreen} organization={organization} user={user} onOrgMenu={() => setOrgMenu(!orgMenu)} />{orgMenu && <div className="switcher-menu">{organizations.map((org) => <button className={org.id === organization.id ? 'active' : ''} key={org.id} onClick={() => { setOrganizationId(org.id); setSelectedProjectId(projects.find((project) => project.organizationId === org.id)?.id ?? ''); setOrgMenu(false); setScreen('dashboard'); }}>{org.id === organization.id ? '✓ ' : ''}{org.name}</button>)}<form action={createOrganizationAction}><input name="name" placeholder="New organization" required /><button>＋ Create organization</button></form></div>}<main className="main"><Topbar title={title} organization={organization} user={user} onHelp={() => window.alert('Need help? Check the deployment diagnostics or project documentation.')} /><div className="content">{(screen === 'dashboard' || screen === 'wizard') && <Dashboard organization={organization} projects={organizationProjects} onCreate={() => { setWizardStep(1); setScreen('wizard'); }} onSelect={(projectId) => { setSelectedProjectId(projectId); setScreen('credentials'); }} />}{screen === 'wizard' && <Wizard organization={organization} step={wizardStep} setStep={setWizardStep} onCancel={() => setScreen('dashboard')} />}{screen === 'deployment' && <Deployment job={activeJob} onCredentials={() => { if (activeJob?.projectId) setSelectedProjectId(activeJob.projectId); setScreen('credentials'); }} />}{screen === 'credentials' && <Credentials project={selectedProject} />}</div></main></div>;
 }

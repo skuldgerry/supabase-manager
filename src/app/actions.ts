@@ -7,6 +7,7 @@ import type { HostId, OrganizationId, ProjectId } from "@/lib/domain";
 import { hashPassword, verifyPassword } from "@/lib/security/password";
 import { decryptJson, encryptJson, getMasterKey, type EncryptedEnvelope } from "@/lib/security/encryption";
 import { scheduleProvisioning } from "@/lib/orchestrator/broker";
+import { adapterForRelease, discoverProjectPorts } from "@/lib/orchestrator";
 import { loginSchema, organizationSchema, projectCreationSchema, setupAdminSchema } from "@/lib/validation";
 
 export type FormActionState = { error?: string };
@@ -136,6 +137,23 @@ export async function createProjectAction(
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid project configuration." };
 
+  try {
+    adapterForRelease(parsed.data.supabaseRelease);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Unsupported official Supabase release." };
+  }
+
+  const requestedPorts = {
+    api: parsed.data.ports.api,
+    dbSession: parsed.data.ports.databaseSession,
+    dbTransaction: parsed.data.ports.databaseTransaction,
+  };
+  const livePorts = await discoverProjectPorts(host.id, requestedPorts);
+  if (livePorts.conflicts.length > 0) {
+    const summary = livePorts.conflicts.map(({ field, port }) => `${field} (${port})`).join(", ");
+    return { error: `These host ports are already in use: ${summary}. Go back to Ports & access to refresh them.` };
+  }
+
   let jobId: string;
   try {
     const deployment = repository.createProjectDeployment({
@@ -146,11 +164,7 @@ export async function createProjectAction(
       stackRelease: parsed.data.supabaseRelease,
       publicUrl: parsed.data.publicUrl,
       siteUrl: parsed.data.siteUrl,
-      ports: {
-        api: parsed.data.ports.api,
-        dbSession: parsed.data.ports.databaseSession,
-        dbTransaction: parsed.data.ports.databaseTransaction,
-      },
+      ports: requestedPorts,
       databaseUsername: "postgres",
       dashboardUsername: parsed.data.dashboardUsername,
       createdBy: authenticated.user.id,
