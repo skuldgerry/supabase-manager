@@ -32,6 +32,9 @@ RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
 COPY --from=turbo /app/out/full ./
+# Turborepo's pruned output can omit the tracked declaration assets that the
+# Functions editor imports as raw text. Keep the upstream files verbatim.
+COPY studio-ui/apps/studio/public/deno/ ./apps/studio/public/deno/
 
 # Multi-Head uses GoTrue-backed manager authentication. This will be replaced
 # by the broker session adapter after the UI parity milestone.
