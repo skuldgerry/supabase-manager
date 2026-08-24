@@ -1,5 +1,8 @@
 # Supabase Manager
 
+> UI migration work is maintained in `studio-ui/`, which vendors the exact
+> Studio/Multi-Head frontend baseline. See [the UI migration notes](./docs/ui-migration.md).
+
 Supabase Manager is a local-first control plane for running multiple isolated
 projects from Supabase's official self-hosted Docker stack. It provides one
 login, organizations, project switching, per-project ports and initial secrets,
