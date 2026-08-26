@@ -22,6 +22,7 @@ import type {
   OrganizationTransfer,
   OrganizationTransferStatus,
   Project,
+  ProjectOwnership,
   ProjectId,
   ProjectPorts,
   ProjectStatus,
@@ -31,6 +32,7 @@ import type {
   Timestamp,
   User,
   UserId,
+  VolumeInventory,
 } from "../domain";
 
 type Id<T> = T;
@@ -92,6 +94,7 @@ interface ProjectRow {
   name: string;
   slug: string;
   status: ProjectStatus;
+  ownership: ProjectOwnership;
   stack_release: string;
   public_url: string;
   site_url: string;
@@ -149,6 +152,18 @@ interface CredentialRow {
   updated_at: string;
 }
 
+interface VolumeRow {
+  id: string;
+  project_id: string;
+  docker_name: string;
+  kind: VolumeInventory["kind"];
+  purpose: string;
+  stack_release: string;
+  status: VolumeInventory["status"];
+  created_at: string;
+  last_seen_at: string | null;
+}
+
 const now = (): Timestamp => new Date().toISOString();
 const id = <T extends string>(): Id<T> => randomUUID() as Id<T>;
 
@@ -192,7 +207,7 @@ function mapHost(row: HostRow): Host {
 
 function mapProject(row: ProjectRow): Project {
   const ports: ProjectPorts = { api: row.api_port, dbSession: row.db_session_port, dbTransaction: row.db_transaction_port };
-  return { id: row.id as ProjectId, organizationId: row.organization_id as OrganizationId, hostId: row.host_id as HostId, name: row.name, slug: row.slug, status: row.status, stackRelease: row.stack_release, publicUrl: row.public_url, siteUrl: row.site_url, ports, databaseUsername: row.database_username, dashboardUsername: row.dashboard_username, createdBy: row.created_by as UserId, createdAt: row.created_at, updatedAt: row.updated_at, readyAt: row.ready_at, deletedAt: row.deleted_at };
+  return { id: row.id as ProjectId, organizationId: row.organization_id as OrganizationId, hostId: row.host_id as HostId, name: row.name, slug: row.slug, status: row.status, ownership: row.ownership, stackRelease: row.stack_release, publicUrl: row.public_url, siteUrl: row.site_url, ports, databaseUsername: row.database_username, dashboardUsername: row.dashboard_username, createdBy: row.created_by as UserId, createdAt: row.created_at, updatedAt: row.updated_at, readyAt: row.ready_at, deletedAt: row.deleted_at };
 }
 
 function mapJob(row: JobRow): DurableJob {
@@ -229,6 +244,20 @@ function mapCredential(row: CredentialRow): EncryptedCredential {
   };
 }
 
+function mapVolume(row: VolumeRow): VolumeInventory {
+  return {
+    id: row.id as VolumeInventory["id"],
+    projectId: row.project_id as ProjectId,
+    dockerName: row.docker_name,
+    kind: row.kind,
+    purpose: row.purpose,
+    stackRelease: row.stack_release,
+    status: row.status,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+  };
+}
+
 export interface CreateFirstAdminInput { readonly email: string; readonly displayName: string; readonly passwordHash: string; }
 export interface BootstrapControlPlaneInput extends CreateFirstAdminInput {
   readonly organizationName: string;
@@ -237,7 +266,8 @@ export interface BootstrapControlPlaneInput extends CreateFirstAdminInput {
 export interface CreateSessionInput { readonly userId: UserId; readonly tokenHash: string; readonly expiresAt: Timestamp; }
 export interface BootstrapHostInput { readonly name?: string; readonly dockerSocketPath?: string; }
 export interface CreateOrganizationInput { readonly name: string; readonly slug: string; readonly createdBy: UserId; }
-export interface CreateProjectInput { readonly organizationId: OrganizationId; readonly hostId: HostId; readonly name: string; readonly slug: string; readonly stackRelease: string; readonly publicUrl?: string; readonly siteUrl?: string; readonly ports: ProjectPorts; readonly databaseUsername: string; readonly dashboardUsername: string; readonly createdBy: UserId; }
+export interface CreateProjectInput { readonly organizationId: OrganizationId; readonly hostId: HostId; readonly name: string; readonly slug: string; readonly stackRelease: string; readonly publicUrl?: string; readonly siteUrl?: string; readonly ports: ProjectPorts; readonly databaseUsername: string; readonly dashboardUsername: string; readonly createdBy: UserId; readonly ownership?: ProjectOwnership; }
+export interface AdoptExternalProjectInput extends CreateProjectInput { readonly ownership: "external"; }
 export interface CreateJobInput { readonly type: JobType; readonly projectId?: ProjectId | null; readonly requestedBy: UserId; readonly maxAttempts?: number; }
 export interface AppendJobEventInput { readonly jobId: JobId; readonly stage?: DeploymentStage | null; readonly level: "info" | "warning" | "error"; readonly message: string; readonly details?: Readonly<Record<string, string | number | boolean | null>>; }
 export interface TransferProjectInput { readonly projectId: ProjectId; readonly toOrganizationId: OrganizationId; readonly requestedBy: UserId; readonly destinationApprovedBy: UserId; }
@@ -398,7 +428,19 @@ export class ControlPlaneRepository {
     return this.db.transaction(() => {
       this.requireManager(input.organizationId, input.createdBy);
       const projectId = id<ProjectId>();
-      this.db.prepare("INSERT INTO projects (id, organization_id, host_id, name, slug, status, stack_release, public_url, site_url, api_port, db_session_port, db_transaction_port, database_username, dashboard_username, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(projectId, input.organizationId, input.hostId, required(input.name, "name"), slug(input.slug), required(input.stackRelease, "stackRelease"), required(input.publicUrl ?? `http://localhost:${input.ports.api}`, "publicUrl"), required(input.siteUrl ?? "http://localhost:3000", "siteUrl"), input.ports.api, input.ports.dbSession, input.ports.dbTransaction, required(input.databaseUsername, "databaseUsername"), required(input.dashboardUsername, "dashboardUsername"), input.createdBy, timestamp, timestamp);
+      this.db.prepare("INSERT INTO projects (id, organization_id, host_id, name, slug, status, ownership, stack_release, public_url, site_url, api_port, db_session_port, db_transaction_port, database_username, dashboard_username, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(projectId, input.organizationId, input.hostId, required(input.name, "name"), slug(input.slug), input.ownership ?? "manager-owned", required(input.stackRelease, "stackRelease"), required(input.publicUrl ?? `http://localhost:${input.ports.api}`, "publicUrl"), required(input.siteUrl ?? "http://localhost:3000", "siteUrl"), input.ports.api, input.ports.dbSession, input.ports.dbTransaction, required(input.databaseUsername, "databaseUsername"), required(input.dashboardUsername, "dashboardUsername"), input.createdBy, timestamp, timestamp);
+      return mapProject(this.db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow);
+    })();
+  }
+
+  /** Register a reachable stack without claiming any of its Docker resources. */
+  public adoptExternalProject(input: AdoptExternalProjectInput): Project {
+    const timestamp = now();
+    if (new Set(Object.values(input.ports)).size !== 3) throw new Error("project ports must be unique");
+    return this.db.transaction(() => {
+      this.requireManager(input.organizationId, input.createdBy);
+      const projectId = id<ProjectId>();
+      this.db.prepare("INSERT INTO projects (id, organization_id, host_id, name, slug, status, ownership, stack_release, public_url, site_url, api_port, db_session_port, db_transaction_port, database_username, dashboard_username, created_by, created_at, updated_at, ready_at) VALUES (?, ?, ?, ?, ?, 'ready', 'external', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(projectId, input.organizationId, input.hostId, required(input.name, "name"), slug(input.slug), required(input.stackRelease, "stackRelease"), required(input.publicUrl ?? "", "publicUrl"), required(input.siteUrl ?? input.publicUrl ?? "", "siteUrl"), input.ports.api, input.ports.dbSession, input.ports.dbTransaction, required(input.databaseUsername, "databaseUsername"), required(input.dashboardUsername, "dashboardUsername"), input.createdBy, timestamp, timestamp, timestamp);
       return mapProject(this.db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow);
     })();
   }
@@ -470,6 +512,26 @@ export class ControlPlaneRepository {
   public releaseProjectPorts(projectId: ProjectId): void {
     this.db.prepare("UPDATE port_reservations SET status = 'released', released_at = ? WHERE project_id = ? AND status IN ('held', 'active')")
       .run(now(), projectId);
+  }
+
+  public queueProjectDeletion(projectId: ProjectId, requestedBy: UserId): DurableJob {
+    return this.db.transaction(() => {
+      const project = this.getProject(projectId);
+      if (!project) throw new Error("project not found");
+      this.requireManager(project.organizationId, requestedBy);
+      if (project.status === "deleting") throw new Error("project deletion is already queued");
+      this.updateProjectStatus(projectId, "deleting");
+      const job = this.createJob({ type: "delete-project", projectId, requestedBy, maxAttempts: 1 });
+      this.appendJobEvent({ jobId: job.id, stage: "stopping-services", level: "info", message: "Project deletion accepted" });
+      return job;
+    })();
+  }
+
+  public markProjectDeleted(projectId: ProjectId): void {
+    const timestamp = now();
+    const result = this.db.prepare("UPDATE projects SET status = 'deleting', deleted_at = ?, updated_at = ? WHERE id = ?")
+      .run(timestamp, timestamp, projectId);
+    if (result.changes !== 1) throw new Error("project not found");
   }
 
   public getProject(projectId: ProjectId): Project | null {
@@ -561,6 +623,10 @@ export class ControlPlaneRepository {
       .run(projectId, required(name, "name")).changes === 1;
   }
 
+  public deleteProjectCredentials(projectId: ProjectId): number {
+    return this.db.prepare("DELETE FROM credential_metadata WHERE project_id = ?").run(projectId).changes;
+  }
+
   public recordVolume(input: RecordVolumeInput): void {
     const timestamp = now();
     this.db.prepare(`
@@ -570,6 +636,16 @@ export class ControlPlaneRepository {
         status = 'present', kind = excluded.kind, purpose = excluded.purpose,
         stack_release = excluded.stack_release, last_seen_at = excluded.last_seen_at
     `).run(randomUUID(), input.projectId, input.dockerName, input.kind, input.purpose, input.stackRelease, timestamp, timestamp);
+  }
+
+  public listProjectVolumes(projectId: ProjectId): readonly VolumeInventory[] {
+    return (this.db.prepare("SELECT * FROM volume_inventory WHERE project_id = ? ORDER BY docker_name").all(projectId) as VolumeRow[])
+      .map(mapVolume);
+  }
+
+  public markProjectVolumesMissing(projectId: ProjectId): void {
+    this.db.prepare("UPDATE volume_inventory SET status = 'missing', last_seen_at = ? WHERE project_id = ?")
+      .run(now(), projectId);
   }
 
   public transferProject(input: TransferProjectInput): OrganizationTransfer {

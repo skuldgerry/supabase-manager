@@ -35,6 +35,7 @@ export default async function Home({ searchParams }: PageProps) {
     organizationId: project.organizationId,
     name: project.name,
     status: project.status,
+    ownership: project.ownership,
     publicUrl: project.publicUrl,
     apiPort: project.ports.api,
     databaseSessionPort: project.ports.dbSession,

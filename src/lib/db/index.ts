@@ -31,6 +31,13 @@ export function initializeDatabase(db: SqliteDatabase): void {
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
   db.exec(CONTROL_PLANE_SCHEMA);
+  // The control-plane database predates explicit project ownership. Keep
+  // existing installations safe by treating legacy rows as manager-owned and
+  // adding the column without recreating or rewriting the projects table.
+  const projectColumns = db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+  if (!projectColumns.some((column) => column.name === "ownership")) {
+    db.exec("ALTER TABLE projects ADD COLUMN ownership TEXT NOT NULL DEFAULT 'manager-owned' CHECK (ownership IN ('manager-owned', 'external'))");
+  }
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
 }
 

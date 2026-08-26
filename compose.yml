@@ -1,25 +1,28 @@
 services:
-  manager:
-    image: skuldgerry/supabase-manager:0.1.2-dev
+  broker:
+    image: skuldgerry/supabase-manager:1.0.0-rc.1-broker
     restart: unless-stopped
     environment:
       NODE_ENV: production
       MANAGER_DATA_DIR: /data
-      MANAGER_PORT: 3000
+      MANAGER_PORT: 3001
       MANAGER_BIND_ADDRESS: 0.0.0.0
-      MANAGER_PUBLIC_URL: http://localhost:3000
+      MANAGER_PUBLIC_URL: http://manager:3000
+      MANAGER_PROJECT_HOST: host.docker.internal
+      MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
       DOCKER_SOCKET_PATH: /var/run/docker.sock
       SESSION_TTL_HOURS: 24
-    ports:
-      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - manager-data:/data
+      - broker-data:/data
+      - manager-shared:/run/supabase-manager
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:
         - CMD-SHELL
         - >-
-          node -e "fetch('http://127.0.0.1:' + (process.env.MANAGER_PORT || '3000') + '/api/health')
+          node -e "fetch('http://127.0.0.1:3001/api/health')
           .then((response) => process.exit(response.ok ? 0 : 1))
           .catch(() => process.exit(1))"
       interval: 10s
@@ -27,5 +30,39 @@ services:
       retries: 12
       start_period: 15s
 
+  manager:
+    image: skuldgerry/supabase-manager:1.0.0-rc.1
+    restart: unless-stopped
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      STUDIO_DATA_DIR: /data
+      MANAGER_BROKER_URL: http://broker:3001
+      MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
+      NEXT_PUBLIC_STUDIO_AUTH: manager
+      DEFAULT_ORGANIZATION_NAME: Default Organization
+    ports:
+      - "3000:3000"
+    volumes:
+      - studio-data:/data
+      - manager-shared:/run/supabase-manager:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:3000/api/self-hosted/session')
+          .then((response) => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
 volumes:
-  manager-data:
+  broker-data:
+  studio-data:
+  manager-shared:

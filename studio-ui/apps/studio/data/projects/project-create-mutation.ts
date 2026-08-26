@@ -29,20 +29,14 @@ export type ProjectCreateVariables = {
   postgresEngine?: PostgresEngine
   releaseChannel?: ReleaseChannel
   highAvailability?: boolean
-  // Self-hosted multi-head fields
   selfHosted?: {
-    db_host?: string
-    db_port?: number
-    db_user?: string
-    db_name?: string
-    anon_key?: string
-    service_key?: string
-    jwt_secret?: string
+    creation_mode: 'stack'
+    stack_release?: string
     public_url?: string
-    docker_host?: string
-    cluster_mode?: boolean
-    creation_mode?: 'stack' | 'embedded' | 'pocketbase' | 'pocketbase-embedded'
-    embedded_target_ref?: string
+    site_url?: string
+    ports?: { api: number; dbSession: number; dbTransaction: number }
+    dashboard_username?: string
+    custom_credentials?: { postgresPassword: string; dashboardPassword: string; jwtSecret: string }
   }
 }
 
@@ -64,7 +58,7 @@ export async function createProject({
   highAvailability,
   selfHosted,
 }: ProjectCreateVariables) {
-  const body: CreateProjectBody = {
+  const body: CreateProjectBody & Record<string, unknown> = {
     cloud_provider: cloudProvider as CloudProvider,
     organization_slug: organizationSlug,
     name,
@@ -82,8 +76,15 @@ export async function createProject({
     postgres_engine: postgresEngine,
     release_channel: releaseChannel,
     high_availability: highAvailability,
-    // Spread self-hosted extra fields so the self-hosted API handler can read them
-    ...(selfHosted as any),
+    ...(selfHosted && {
+      creation_mode: selfHosted.creation_mode,
+      stack_release: selfHosted.stack_release,
+      public_url: selfHosted.public_url,
+      site_url: selfHosted.site_url,
+      ports: selfHosted.ports,
+      dashboard_username: selfHosted.dashboard_username,
+      custom_credentials: selfHosted.custom_credentials,
+    }),
   }
 
   const { data, error } = await post(`/platform/projects`, {

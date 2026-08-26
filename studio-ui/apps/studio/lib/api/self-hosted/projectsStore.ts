@@ -34,6 +34,14 @@ export interface StoredProject {
   service_key: string
   jwt_secret: string
 
+  // Private control-plane linkage. Credentials remain encrypted in the broker.
+  broker_project_id?: string
+  broker_job_id?: string
+  broker_stage?: string | null
+  broker_error?: string | null
+  stack_release?: string
+  ownership?: 'manager-owned' | 'external'
+
   // Docker-orchestrated fields (new schema)
   postgres_port?: number
   kong_http_port?: number
@@ -151,6 +159,7 @@ function makeDefaultEntry(): StoredProject {
  * additional projects persisted to disk.
  */
 export function getStoredProjects(): StoredProject[] {
+  if (process.env.MANAGER_BROKER_URL) return readFromDisk()
   return [makeDefaultEntry(), ...readFromDisk()]
 }
 
@@ -159,6 +168,7 @@ export function getStoredProjectByRef(ref: string): StoredProject | undefined {
 }
 
 export interface CreateProjectData {
+  ref?: string
   name: string
   organization_slug?: string
   public_url: string
@@ -173,6 +183,12 @@ export interface CreateProjectData {
   jwt_secret: string
   status?: string
   docker_host?: string
+  broker_project_id?: string
+  broker_job_id?: string
+  broker_stage?: string | null
+  broker_error?: string | null
+  stack_release?: string
+  ownership?: 'manager-owned' | 'external'
 }
 
 /**
@@ -212,7 +228,7 @@ export function createStoredProject(data: CreateProjectData): StoredProject {
   const existing = readFromDisk()
   const all = getStoredProjects()
   const id = Math.max(...all.map((p) => p.id), 0) + 1
-  const ref = crypto.randomBytes(6).toString('hex')
+  const ref = data.ref ?? crypto.randomBytes(6).toString('hex')
 
   const orgSlug = data.organization_slug ?? 'default-org-slug'
   const org = getStoredOrganizationBySlug(orgSlug)
@@ -238,6 +254,12 @@ export function createStoredProject(data: CreateProjectData): StoredProject {
     anon_key: data.anon_key,
     service_key: data.service_key,
     jwt_secret: data.jwt_secret,
+    ...(data.broker_project_id !== undefined && { broker_project_id: data.broker_project_id }),
+    ...(data.broker_job_id !== undefined && { broker_job_id: data.broker_job_id }),
+    ...(data.broker_stage !== undefined && { broker_stage: data.broker_stage }),
+    ...(data.broker_error !== undefined && { broker_error: data.broker_error }),
+    ...(data.stack_release !== undefined && { stack_release: data.stack_release }),
+    ...(data.ownership !== undefined && { ownership: data.ownership }),
     ...(data.docker_host !== undefined && { docker_host: data.docker_host }),
   }
 

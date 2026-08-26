@@ -1,5 +1,6 @@
 import { PG_META_URL } from '@/lib/constants'
 import { getStoredProjectByRef } from './projectsStore'
+import { getManagerBrokerProxyConfig } from './managerBroker'
 
 export interface PgMetaProxyConfig {
   /** pg-meta base URL to call (e.g. "http://localhost:8020/pg") */
@@ -25,6 +26,13 @@ export interface PgMetaProxyConfig {
 export function getPgMetaProxyConfig(ref: string | undefined): PgMetaProxyConfig {
   if (ref && ref !== 'default') {
     const project = getStoredProjectByRef(ref)
+    if (project?.broker_project_id) {
+      const proxy = getManagerBrokerProxyConfig(project.broker_project_id)
+      return {
+        pgMetaBase: `${proxy.baseUrl}/pg`,
+        projectHeaders: proxy.headers,
+      }
+    }
     if (project?.kong_http_port && project?.service_key) {
       return {
         pgMetaBase: `http://${process.env.MULTI_HEAD_HOST || 'localhost'}:${project.kong_http_port}/pg`,

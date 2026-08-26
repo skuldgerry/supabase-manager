@@ -1,7 +1,8 @@
-import { openai } from '@ai-sdk/openai'
+import { createOpenAI, openai } from '@ai-sdk/openai'
 import { LanguageModel } from 'ai'
 
 import { checkAwsCredentials, createRoutedBedrock } from './bedrock'
+import { getManagerAiRuntime } from './manager-provider'
 import {
   BedrockModel,
   getDefaultModelForProvider,
@@ -41,6 +42,7 @@ export type GetModelParams =
        * fallbacks) before calling getModel.
        */
       modelEntry: OpenAIModelEntry
+      managerProjectRef?: string
     }
   | {
       provider: 'bedrock'
@@ -84,16 +86,21 @@ export async function getModel(params: GetModelParams): Promise<ModelResponse> {
   }
 
   if (provider === 'openai') {
-    if (!process.env.OPENAI_API_KEY) {
+    const managerRuntime = await getManagerAiRuntime(params.managerProjectRef)
+    const apiKey = managerRuntime?.apiKey ?? process.env.OPENAI_API_KEY
+    if (!apiKey) {
       return { error: new Error('OPENAI_API_KEY not available') }
     }
     const baseProviderOptions = providerRegistry.providerOptions?.openai ?? {}
     const openaiProviderOptions = modelEntry?.reasoningEffort
       ? { ...baseProviderOptions, reasoningEffort: modelEntry.reasoningEffort }
       : baseProviderOptions
+    const configuredProvider = managerRuntime
+      ? createOpenAI({ apiKey, ...(managerRuntime.baseUrl ? { baseURL: managerRuntime.baseUrl } : {}) })
+      : openai
     return {
       modelParams: {
-        model: openai(chosenModelId as OpenAIModelId),
+        model: configuredProvider((managerRuntime?.model || chosenModelId) as OpenAIModelId),
         providerOptions: { openai: openaiProviderOptions },
       },
       promptProviderOptions: models[chosenModelId as OpenAIModelId]?.promptProviderOptions,

@@ -72,6 +72,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     } = await getModel({
       provider: 'openai',
       modelEntry: DEFAULT_COMPLETION_MODEL,
+      managerProjectRef: projectRef,
     })
 
     if (modelError) {

@@ -5,6 +5,8 @@ import {
   findMemberByEmail,
   verifyMemberPassword,
 } from '@/lib/api/self-hosted/membersStore'
+import { authenticateManagerBroker } from '@/lib/api/self-hosted/managerBroker'
+import { STUDIO_AUTH_MANAGER } from '@/lib/constants'
 
 const USERNAME = process.env.DASHBOARD_USERNAME || 'supabase'
 const PASSWORD = process.env.DASHBOARD_PASSWORD || ''
@@ -66,17 +68,35 @@ function setCookie(res: NextApiResponse, token: string) {
   )
 }
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
-    return res.status(200).json({ required: Boolean(PASSWORD) })
+    return res.status(200).json({ required: STUDIO_AUTH_MANAGER || Boolean(PASSWORD) })
   }
 
   if (req.method === 'POST') {
-    const { email, username, password } = req.body ?? {}
+    const { email, username, password, code } = req.body ?? {}
     const identifier = String(email ?? username ?? '')
     const pw = String(password ?? '')
 
-    // Try member-based auth when an email-like identifier is provided
+    if (STUDIO_AUTH_MANAGER) {
+      try {
+        const result = await authenticateManagerBroker({
+          email: identifier,
+          password: pw,
+          ...(code ? { code: String(code) } : {}),
+        })
+        if (result.mfaRequired) return res.status(202).json({ ok: false, mfaRequired: true })
+        const found = findMemberByEmail(identifier)
+        if (!result.ok || !found) return res.status(401).json({ error: 'Invalid credentials' })
+        const { member, org_slug } = found
+        setCookie(res, makeToken({ gotrue_id: member.gotrue_id, role_id: member.role_ids[0], org_slug }))
+        return res.status(200).json({ ok: true, role_id: member.role_ids[0] })
+      } catch (error) {
+        return res.status(401).json({ error: error instanceof Error ? error.message : 'Invalid credentials' })
+      }
+    }
+
+    // Try member-based auth for legacy self-hosted mode.
     if (identifier) {
       const found = findMemberByEmail(identifier)
       if (found?.member.password_hash) {
@@ -95,7 +115,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Global admin fallback (backward compat)
-    if (!PASSWORD) {
+    if (!PASSWORD && !STUDIO_AUTH_MANAGER) {
       setCookie(res, makeToken())
       return res.status(200).json({ ok: true })
     }

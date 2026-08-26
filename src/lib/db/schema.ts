@@ -1,6 +1,6 @@
 /** SQLite schema for the control plane. The application should execute this
  * statement once inside a transaction before serving requests. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CONTROL_PLANE_SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('provisioning', 'ready', 'stopped', 'failed', 'deleting')),
+  ownership TEXT NOT NULL DEFAULT 'manager-owned' CHECK (ownership IN ('manager-owned', 'external')),
   stack_release TEXT NOT NULL,
   public_url TEXT NOT NULL,
   site_url TEXT NOT NULL,
@@ -115,6 +116,26 @@ CREATE TABLE IF NOT EXISTS credential_metadata (
   UNIQUE(project_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_credentials_project ON credential_metadata(project_id);
+
+CREATE TABLE IF NOT EXISTS mfa_factors (
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  ciphertext_base64 TEXT NOT NULL,
+  nonce_base64 TEXT NOT NULL,
+  auth_tag_base64 TEXT NOT NULL,
+  associated_data TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL UNIQUE,
+  used_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_user ON mfa_recovery_codes(user_id, used_at);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY NOT NULL,

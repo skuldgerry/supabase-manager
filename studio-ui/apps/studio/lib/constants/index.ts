@@ -13,6 +13,10 @@ export const IS_PLATFORM = process.env.NEXT_PUBLIC_IS_PLATFORM === 'true'
 export const STUDIO_AUTH_GOTRUE =
   !IS_PLATFORM && process.env.NEXT_PUBLIC_STUDIO_AUTH === 'gotrue'
 
+/** Manager mode uses the local Studio account UI and an HMAC session cookie. */
+export const STUDIO_AUTH_MANAGER =
+  !IS_PLATFORM && process.env.NEXT_PUBLIC_STUDIO_AUTH === 'manager'
+
 /**
  * Indicates that the app is running in a test environment (E2E tests).
  * Set via NEXT_PUBLIC_NODE_ENV=test in the generateLocalEnv.js script.

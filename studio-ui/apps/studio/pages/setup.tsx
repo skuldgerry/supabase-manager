@@ -8,7 +8,7 @@ import { SignInWithGitHub } from '@/components/interfaces/SignIn/SignInWithGitHu
 import { AuthenticationLayout } from '@/components/layouts/AuthenticationLayout'
 import SignInLayout from '@/components/layouts/SignInLayout/SignInLayout'
 import { useGoTrueProviders } from '@/hooks/misc/useGoTrueProviders'
-import { STUDIO_AUTH_GOTRUE } from '@/lib/constants'
+import { STUDIO_AUTH_GOTRUE, STUDIO_AUTH_MANAGER } from '@/lib/constants'
 import type { NextPageWithLayout } from '@/types'
 
 const SetupPage: NextPageWithLayout = () => {
@@ -20,7 +20,7 @@ const SetupPage: NextPageWithLayout = () => {
 
   const gotrueProviders = useGoTrueProviders()
 
-  if (!STUDIO_AUTH_GOTRUE) {
+  if (!STUDIO_AUTH_GOTRUE && !STUDIO_AUTH_MANAGER) {
     if (typeof window !== 'undefined') router.replace('/projects')
     return null
   }
@@ -119,12 +119,12 @@ const SetupPage: NextPageWithLayout = () => {
             id="setup-password"
             type="password"
             autoComplete="new-password"
-            placeholder="Min. 8 characters"
+            placeholder="Min. 12 characters, including a number"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={loading}
             required
-            minLength={8}
+            minLength={12}
           />
         </div>
 

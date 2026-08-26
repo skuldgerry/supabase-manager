@@ -14,7 +14,7 @@ import SignInLayout from '@/components/layouts/SignInLayout/SignInLayout'
 import { useCustomContent } from '@/hooks/custom-content/useCustomContent'
 import { useGoTrueProviders } from '@/hooks/misc/useGoTrueProviders'
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
-import { IS_PLATFORM, STUDIO_AUTH_GOTRUE } from '@/lib/constants'
+import { IS_PLATFORM, STUDIO_AUTH_GOTRUE, STUDIO_AUTH_MANAGER } from '@/lib/constants'
 import type { NextPageWithLayout } from '@/types'
 
 const SignInPage: NextPageWithLayout = () => {
@@ -47,7 +47,7 @@ const SignInPage: NextPageWithLayout = () => {
   const showOrDivider = (showGithub || showSso || customProvider) && showEmail
 
   useEffect(() => {
-    if (STUDIO_AUTH_GOTRUE) {
+    if (STUDIO_AUTH_GOTRUE || STUDIO_AUTH_MANAGER) {
       // Redirect to setup if no admin has been created yet
       fetch('/api/self-hosted/bootstrap')
         .then((r) => r.json())
@@ -74,7 +74,7 @@ const SignInPage: NextPageWithLayout = () => {
     }
   }, [router])
 
-  if (!IS_PLATFORM && !STUDIO_AUTH_GOTRUE && selfHostedAuthRequired) {
+  if (!IS_PLATFORM && !STUDIO_AUTH_GOTRUE && (STUDIO_AUTH_MANAGER || selfHostedAuthRequired)) {
     return <SelfHostedSignInForm />
   }
 

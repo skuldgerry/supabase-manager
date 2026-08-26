@@ -29,6 +29,15 @@ export type ProjectCreateVariables = {
   postgresEngine?: PostgresEngine
   releaseChannel?: ReleaseChannel
   highAvailability?: boolean
+  selfHosted?: {
+    creation_mode: 'stack'
+    stack_release?: string
+    public_url?: string
+    site_url?: string
+    ports?: { api: number; dbSession: number; dbTransaction: number }
+    dashboard_username?: string
+    custom_credentials?: { postgresPassword: string; dashboardPassword: string; jwtSecret: string }
+  }
 }
 
 export async function createProject({
@@ -47,8 +56,9 @@ export async function createProject({
   postgresEngine,
   releaseChannel,
   highAvailability,
+  selfHosted,
 }: ProjectCreateVariables) {
-  const body: CreateProjectBody = {
+  const body: CreateProjectBody & Record<string, unknown> = {
     cloud_provider: cloudProvider as CloudProvider,
     organization_slug: organizationSlug,
     name,
@@ -66,6 +76,15 @@ export async function createProject({
     postgres_engine: postgresEngine,
     release_channel: releaseChannel,
     high_availability: highAvailability,
+    ...(selfHosted && {
+      creation_mode: selfHosted.creation_mode,
+      stack_release: selfHosted.stack_release,
+      public_url: selfHosted.public_url,
+      site_url: selfHosted.site_url,
+      ports: selfHosted.ports,
+      dashboard_username: selfHosted.dashboard_username,
+      custom_credentials: selfHosted.custom_credentials,
+    }),
   }
 
   const { data, error } = await post(`/platform/projects`, {

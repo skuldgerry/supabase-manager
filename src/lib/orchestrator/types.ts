@@ -74,6 +74,8 @@ export interface HostDriver {
   createNetwork(name: string, labels: Readonly<Record<string, string>>): Promise<void>;
   createVolume(name: string, labels: Readonly<Record<string, string>>): Promise<void>;
   removeContainer(id: string, force?: boolean): Promise<void>;
+  removeVolume(name: string, force?: boolean): Promise<void>;
+  removeNetwork(name: string): Promise<void>;
   compose(spec: ComposeInvocation): Promise<CommandResult>;
 }
 

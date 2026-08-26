@@ -6,6 +6,7 @@ import { useEffect, useRef } from 'react'
 import { cn } from 'ui'
 
 import { AdvisorSection } from './AdvisorSection'
+import { BrokerDeploymentProgress } from './BrokerDeploymentProgress'
 import { ConnectSection } from './ConnectSection'
 import { CustomReportSection } from './CustomReportSection'
 import { DEFAULT_SECTION_ORDER, mergeSectionOrder } from './Home.utils'
@@ -33,6 +34,11 @@ export const ProjectHome = () => {
   const hasShownEnableBranchingModalRef = useRef(false)
   const isPaused = project?.status === PROJECT_STATUS.INACTIVE
   const isComingUp = project?.status === PROJECT_STATUS.COMING_UP
+  const brokerProject = project as typeof project & {
+    broker_job_id?: string
+    broker_error?: string | null
+    organization_slug?: string
+  }
 
   const [sectionOrder, setSectionOrder] = useLocalStorage<string[]>(
     `home-section-order-${project?.ref || 'default'}`,
@@ -78,6 +84,16 @@ export const ProjectHome = () => {
     if (id === 'connect') return showConnectSection
     return true
   })
+
+  if (project && brokerProject.broker_job_id && (isComingUp || isPaused || brokerProject.broker_error)) {
+    return (
+      <BrokerDeploymentProgress
+        projectRef={project.ref}
+        projectName={project.name}
+        organizationSlug={brokerProject.organization_slug ?? ''}
+      />
+    )
+  }
 
   return (
     <div className="w-full h-full">

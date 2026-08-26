@@ -65,7 +65,33 @@ export const projectCreationSchema = z.object({
   }
 });
 
+/** Inputs needed to safely adopt an already-running self-hosted stack. */
+export const projectImportSchema = z.object({
+  organizationId: z.uuid(),
+  name: z.string().trim().min(2).max(100),
+  apiUrl: z.url(),
+  siteUrl: z.url().optional(),
+  dbHost: z.string().trim().min(1).max(253),
+  dbPort: port.default(5432),
+  databaseSessionPort: port,
+  databaseTransactionPort: port,
+  supabaseRelease: z.string().trim().regex(/^self-hosted\/v\d+\.\d+\.\d+$/, "Use an official self-hosted release tag"),
+  dashboardUsername: username,
+  postgresPassword: strongPassword,
+  dashboardPassword: strongPassword,
+  jwtSecret: z.string().min(32).max(512).refine((value) => !/[\r\n]/.test(value), "Line breaks are not allowed"),
+  anonKey: z.string().trim().min(20).max(4096),
+  serviceRoleKey: z.string().trim().min(20).max(4096),
+  publishableKey: z.string().trim().min(1).max(4096).optional(),
+  secretKey: z.string().trim().min(1).max(4096).optional(),
+}).superRefine((value, context) => {
+  if (value.databaseSessionPort === value.databaseTransactionPort) {
+    context.addIssue({ code: "custom", path: ["databaseSessionPort"], message: "Session and transaction pooler ports must differ" });
+  }
+});
+
 export type SetupAdminInput = z.infer<typeof setupAdminSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateOrganizationInput = z.infer<typeof organizationSchema>;
 export type CreateProjectInput = z.infer<typeof projectCreationSchema>;
+export type ImportProjectInput = z.infer<typeof projectImportSchema>;

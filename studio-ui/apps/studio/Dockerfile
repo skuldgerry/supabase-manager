@@ -52,12 +52,16 @@ CMD ["pnpm", "dev:studio"]
 # Compile Next.js
 FROM dev AS builder
 
-# Multi-head always uses GoTrue-backed Studio auth.
+ENV NODE_OPTIONS="--max-old-space-size=3600"
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_BUILD_CPUS=1
+
+# Supabase Manager uses its broker-backed local account and session flow.
 # NEXT_PUBLIC_* vars must be present at build time to be inlined into client bundles.
-ARG NEXT_PUBLIC_STUDIO_AUTH=gotrue
+ARG NEXT_PUBLIC_STUDIO_AUTH=manager
 ENV NEXT_PUBLIC_STUDIO_AUTH=${NEXT_PUBLIC_STUDIO_AUTH}
 
-RUN pnpm --filter studio exec next build
+RUN pnpm --filter studio exec next build --webpack
 
 # Locate the Docker Compose plugin — its path varies across docker:cli versions.
 # Copy it to a fixed location so the production COPY below always works.
@@ -83,10 +87,16 @@ COPY --from=docker-tools /docker-compose /usr/local/lib/docker/cli-plugins/docke
 COPY docker/docker-compose.yml /app/supabase-docker/docker-compose.yml
 COPY docker/volumes/           /app/supabase-docker/volumes/
 
+# The broker generates a persistent internal token in the shared manager
+# volume. Reuse it as Studio's server-side broker credential and HMAC session
+# secret so API routes and Next middleware always verify the same cookie.
+COPY apps/studio/manager-entrypoint.sh /usr/local/bin/supabase-manager-studio-entrypoint
+RUN chmod 0755 /usr/local/bin/supabase-manager-studio-entrypoint
+
 # Default compose template path — overridable via environment variable
 ENV SUPABASE_COMPOSE_FILE=/app/supabase-docker/docker-compose.yml
 
 EXPOSE 3000
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/supabase-manager-studio-entrypoint"]
 HEALTHCHECK --interval=5s --timeout=5s --retries=3 CMD node -e "fetch('http://localhost:3000/api/platform/profile').then((r) => {if (r.status !== 200) throw new Error(r.status)})"
 CMD ["node", "apps/studio/server.js"]

@@ -1,7 +1,7 @@
 import { keepPreviousData } from '@tanstack/react-query'
 import { useDebounce } from '@uidotdev/usehooks'
 import { LOCAL_STORAGE_KEYS, useParams } from 'common'
-import { Grid, List, Loader2, Plus, Search, ShieldCheck, X } from 'lucide-react'
+import { Grid, Import, List, Loader2, Plus, Search, ShieldCheck, X } from 'lucide-react'
 import Link from 'next/link'
 import { parseAsArrayOf, parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs'
 import { useEffect } from 'react'
@@ -17,7 +17,7 @@ import {
 import { useOrgProjectsInfiniteQuery } from '@/data/projects/org-projects-infinite-query'
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useLocalStorageQuery } from '@/hooks/misc/useLocalStorage'
-import { IS_PLATFORM, PROJECT_STATUS } from '@/lib/constants'
+import { IS_PLATFORM, PROJECT_STATUS, STUDIO_AUTH_MANAGER } from '@/lib/constants'
 
 interface HomePageActionsProps {
   slug?: string
@@ -150,9 +150,16 @@ export const HomePageActions = ({ slug: _slug, hideNewProject = false }: HomePag
         )}
 
         {projectCreationEnabled && !hideNewProject && (
-          <Button asChild icon={<Plus />} type="primary" size="tiny">
-            <Link href={`/new/${slug}`}>New project</Link>
-          </Button>
+          <>
+            {STUDIO_AUTH_MANAGER && (
+              <Button asChild icon={<Import />} type="default" size="tiny">
+                <Link href={`/new/${slug}?mode=import`}>Import project</Link>
+              </Button>
+            )}
+            <Button asChild icon={<Plus />} type="primary" size="tiny">
+              <Link href={`/new/${slug}`}>New project</Link>
+            </Button>
+          </>
         )}
       </div>
     </div>

@@ -15,6 +15,9 @@ import {
 import { dropReplicationSlot } from '@/lib/api/self-hosted/replicationManager'
 import { deleteStoredProject, getStoredProjectByRef, getStoredProjects, updateProjectFields } from '@/lib/api/self-hosted/projectsStore'
 import { PROJECT_REST_URL } from '@/lib/constants/api'
+import { deleteManagerBrokerProject, MANAGER_BROKER_ENABLED } from '@/lib/api/self-hosted/managerBroker'
+import { getManagerSessionAdministrator } from '@/lib/api/self-hosted/managerSession'
+import { syncBrokerProject } from '@/lib/api/self-hosted/brokerProjectSync'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -43,6 +46,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handleGet = async (req: NextApiRequest, res: NextApiResponse) => {
   const ref = req.query.ref as string
+  await syncBrokerProject(ref)
   const project = getStoredProjectByRef(ref)
 
   if (!project) {
@@ -92,6 +96,27 @@ const handleDelete = async (req: NextApiRequest, res: NextApiResponse) => {
 
   if (!project) {
     return res.status(404).json({ data: null, error: { message: 'Project not found' } })
+  }
+
+  if (MANAGER_BROKER_ENABLED) {
+    const administrator = getManagerSessionAdministrator(req)
+    if (!administrator) return res.status(403).json({ data: null, error: { message: 'Owner or administrator access is required' } })
+    if (!project.broker_project_id) return res.status(409).json({ data: null, error: { message: 'This project is not owned by the broker and cannot be deleted automatically.' } })
+    try {
+      const view = await deleteManagerBrokerProject(project.broker_project_id, {
+        actorEmail: administrator.primary_email,
+        confirmName: project.name,
+      })
+      updateProjectFields(ref, {
+        status: 'COMING_UP',
+        broker_job_id: view.job?.id,
+        broker_stage: view.job?.stage ?? 'stopping-services',
+        broker_error: null,
+      })
+      return res.status(202).json({ ref, name: project.name, jobId: view.job?.id, deletionQueued: true })
+    } catch (error) {
+      return res.status(409).json({ data: null, error: { message: error instanceof Error ? error.message : 'Project deletion could not be queued' } })
+    }
   }
 
   if (ref === 'default') {

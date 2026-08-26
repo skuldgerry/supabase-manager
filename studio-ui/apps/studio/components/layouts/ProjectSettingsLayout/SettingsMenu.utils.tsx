@@ -29,6 +29,12 @@ export const useGenerateSettingsMenu = () => {
         title: 'Configuration',
         items: [
           {
+            name: 'General',
+            key: 'general',
+            url: `/project/${ref}/settings/general`,
+            items: [],
+          },
+          {
             name: `Log Drains`,
             key: `log-drains`,
             url: `/project/${ref}/settings/log-drains`,
@@ -48,12 +54,6 @@ export const useGenerateSettingsMenu = () => {
                   name: 'Database',
                   key: 'database',
                   url: `/project/${ref}/settings/database`,
-                  items: [] as [],
-                },
-                {
-                  name: 'Backups',
-                  key: 'backups',
-                  url: `/project/${ref}/settings/backups`,
                   items: [] as [],
                 },
               ]),

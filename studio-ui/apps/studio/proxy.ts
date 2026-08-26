@@ -115,11 +115,11 @@ export async function proxy(request: NextRequest) {
     return
   }
 
-  // --- Self-hosted: legacy HMAC session cookie auth guard ---
+  // --- Self-hosted: manager/legacy HMAC session cookie auth guard ---
   const dashboardPassword = process.env.DASHBOARD_PASSWORD
-  if (!IS_PLATFORM && dashboardPassword) {
+  if (!IS_PLATFORM && (studioAuthMode === 'manager' || dashboardPassword)) {
     if (!AUTH_EXEMPT_PREFIXES.some((p) => pathname.startsWith(p))) {
-      const secret = process.env.STUDIO_SESSION_SECRET || dashboardPassword
+      const secret = process.env.STUDIO_SESSION_SECRET || dashboardPassword || ''
       const cookieValue = request.cookies.get('studio_session')?.value
       if (!cookieValue || !(await verifySessionToken(cookieValue, secret))) {
         const signInUrl = request.nextUrl.clone()

@@ -121,3 +121,44 @@ test("project deployment atomically reserves ports and creates a durable job", (
   assert.equal(repository.getProject(first.project.id)?.status, "ready");
   closeDatabase(db);
 });
+
+test("project deletion requires manager permission and tombstones the project", () => {
+  const { db, repository, admin } = fixture();
+  const host = repository.bootstrapLocalHost();
+  const organization = repository.createOrganization({ name: "Acme", slug: "acme", createdBy: admin.id }).organization;
+  const project = repository.createProject({ organizationId: organization.id, hostId: host.id, name: "Disposable", slug: "disposable", stackRelease: "self-hosted/v0.8.0", ports: { api: 8300, dbSession: 54300, dbTransaction: 55300 }, databaseUsername: "postgres", dashboardUsername: "admin", createdBy: admin.id });
+  assert.throws(() => repository.queueProjectDeletion(project.id, "not-a-member" as UserId), /permission required/);
+  const job = repository.queueProjectDeletion(project.id, admin.id);
+  assert.equal(job.type, "delete-project");
+  assert.equal(repository.getProject(project.id)?.status, "deleting");
+  repository.markProjectDeleted(project.id);
+  assert.equal(repository.listProjects(organization.id).length, 0);
+  closeDatabase(db);
+});
+
+test("external project adoption records ownership without reserving manager ports", () => {
+  const { db, repository, admin } = fixture();
+  const host = repository.bootstrapLocalHost();
+  const organization = repository.createOrganization({ name: "External", slug: "external", createdBy: admin.id }).organization;
+  const project = repository.adoptExternalProject({
+    organizationId: organization.id,
+    hostId: host.id,
+    name: "Existing stack",
+    slug: "existing-stack",
+    stackRelease: "self-hosted/v0.8.0",
+    publicUrl: "https://supabase.example.com",
+    siteUrl: "https://app.example.com",
+    ports: { api: 8100, dbSession: 54100, dbTransaction: 55100 },
+    databaseUsername: "postgres",
+    dashboardUsername: "supabase",
+    createdBy: admin.id,
+    ownership: "external",
+  });
+  assert.equal(project.ownership, "external");
+  assert.equal(project.status, "ready");
+  assert.deepEqual(repository.listReservedPorts(host.id), []);
+  const job = repository.queueProjectDeletion(project.id, admin.id);
+  assert.equal(job.type, "delete-project");
+  assert.equal(repository.getProject(project.id)?.ownership, "external");
+  closeDatabase(db);
+});

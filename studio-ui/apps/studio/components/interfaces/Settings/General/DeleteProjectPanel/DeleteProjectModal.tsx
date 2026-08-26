@@ -66,7 +66,14 @@ export const DeleteProjectModal = ({
   ])
 
   const { mutate: deleteProject, isPending: isDeleting } = useProjectDeleteMutation({
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      const deletion = result as typeof result & { deletionQueued?: boolean }
+      if (deletion.deletionQueued) {
+        toast.success(`Deletion started for ${project?.name}`)
+        await router.push(`/project/${projectRef}`)
+        router.reload()
+        return
+      }
       if (!isFree) {
         try {
           await sendExitSurvey({

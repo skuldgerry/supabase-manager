@@ -111,6 +111,7 @@ vi.mock('ui', () => ({
 
 describe('AccountLayout (self-hosted)', () => {
   beforeEach(() => {
+    delete process.env.NEXT_PUBLIC_STUDIO_AUTH
     mockRouter.pathname = '/account/me'
     mockRouter.push.mockReset()
     mockRegisterOpenMenu.mockReset()
@@ -145,7 +146,23 @@ describe('AccountLayout (self-hosted)', () => {
     )
 
     await waitFor(() => {
-      expect(mockRouter.push).toHaveBeenCalledWith('/project/default')
+      expect(mockRouter.push).toHaveBeenCalledWith('/projects')
     })
+  })
+
+  it('keeps manager account security available and shows its navigation link', async () => {
+    process.env.NEXT_PUBLIC_STUDIO_AUTH = 'manager'
+    mockRouter.pathname = '/account/security'
+
+    render(
+      <AccountLayout title="Security">
+        <div>Manager security page</div>
+      </AccountLayout>
+    )
+
+    expect(await screen.findByText('Security')).toBeInTheDocument()
+    expect(screen.queryByText('Access Tokens')).not.toBeInTheDocument()
+    expect(screen.queryByText('Audit Logs')).not.toBeInTheDocument()
+    expect(mockRouter.push).not.toHaveBeenCalled()
   })
 })

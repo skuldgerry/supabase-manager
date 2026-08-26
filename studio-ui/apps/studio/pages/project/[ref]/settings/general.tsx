@@ -1,6 +1,3 @@
-import { IS_PLATFORM } from 'common'
-import { useRouter } from 'next/router'
-import { useEffect } from 'react'
 import { PageContainer } from 'ui-patterns/PageContainer'
 import {
   PageHeader,
@@ -15,6 +12,7 @@ import { ComplianceConfig } from '@/components/interfaces/Settings/General/Compl
 import { CustomDomainConfig } from '@/components/interfaces/Settings/General/CustomDomainConfig/CustomDomainConfig'
 import { DeleteProjectPanel } from '@/components/interfaces/Settings/General/DeleteProjectPanel/DeleteProjectPanel'
 import { General } from '@/components/interfaces/Settings/General/General'
+import { ManagerAiSettingsPanel } from '@/components/interfaces/Settings/General/ManagerAiSettingsPanel'
 import { Project } from '@/components/interfaces/Settings/General/Project'
 import { TransferProjectPanel } from '@/components/interfaces/Settings/General/TransferProjectPanel/TransferProjectPanel'
 import DefaultLayout from '@/components/layouts/DefaultLayout'
@@ -32,18 +30,6 @@ const ProjectSettings: NextPageWithLayout = () => {
   const isBranch = !!project?.parent_project_ref
   const { projectsTransfer: projectTransferEnabled, projectSettingsCustomDomains } =
     useIsFeatureEnabled(['projects:transfer', 'project_settings:custom_domains'])
-  const router = useRouter()
-
-  const { ref: projectRef } = router.query
-  const creationMode = (project as any)?.creation_mode as string | undefined
-  const isPocketBase = creationMode === 'pocketbase' || creationMode === 'pocketbase-embedded'
-  useEffect(() => {
-    if (!IS_PLATFORM && projectRef) {
-      const dest = isPocketBase ? 'pocketbase' : 'log-drains'
-      router.push(`/project/${projectRef}/settings/${dest}`)
-    }
-  }, [router, projectRef, isPocketBase])
-
   const { data: subscription } = useOrgSubscriptionQuery({ orgSlug: selectedOrganization?.slug })
   const hasHipaaAddon = subscriptionHasHipaaAddon(subscription)
 
@@ -62,6 +48,7 @@ const ProjectSettings: NextPageWithLayout = () => {
       <PageContainer size="small">
         <General />
         <Project />
+        <ManagerAiSettingsPanel />
         {/* this is only settable on compliance orgs, currently that means HIPAA orgs */}
         {!isBranch && hasHipaaAddon && <ComplianceConfig />}
         {projectSettingsCustomDomains && <CustomDomainConfig />}

@@ -11,15 +11,17 @@ import { useBranchesQuery } from '@/data/branches/branches-query'
 import { useBackupsQuery } from '@/data/database/backups-query'
 import { DatabaseMigration, useMigrationsQuery } from '@/data/database/migrations-query'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
+import { STUDIO_AUTH_MANAGER } from '@/lib/constants'
 import { EMPTY_ARR } from '@/lib/void'
 
 export const ActivityStats = () => {
   const { ref } = useParams()
   const { data: project } = useSelectedProjectQuery()
 
-  const { data: branchesData, isPending: isLoadingBranches } = useBranchesQuery({
-    projectRef: project?.parent_project_ref ?? project?.ref,
-  })
+  const { data: branchesData, isPending: isLoadingBranches } = useBranchesQuery(
+    { projectRef: project?.parent_project_ref ?? project?.ref },
+    { enabled: !STUDIO_AUTH_MANAGER }
+  )
   const isDefaultProject = project?.parent_project_ref === undefined
   const currentBranch = useMemo(
     () => (branchesData ?? []).find((b) => b.project_ref === ref),
@@ -49,10 +51,10 @@ export const ActivityStats = () => {
   const migrationLabelText =
     migrationsData.length === 0 ? 'No migrations' : (latestMigration?.name ?? 'Unknown')
 
-  const { data: backupsData, isPending: isLoadingBackups } = useBackupsQuery({
-    projectRef: project?.ref,
-    projectStatus: project?.status,
-  })
+  const { data: backupsData, isPending: isLoadingBackups } = useBackupsQuery(
+    { projectRef: project?.ref, projectStatus: project?.status },
+    { enabled: !STUDIO_AUTH_MANAGER }
+  )
   const latestBackup = useMemo(() => {
     const list = backupsData?.backups ?? []
     if (list.length === 0) return undefined
@@ -86,7 +88,7 @@ export const ActivityStats = () => {
         />
 
         <SingleStat
-          href={`/project/${ref}/database/backups/scheduled`}
+          href={STUDIO_AUTH_MANAGER ? undefined : `/project/${ref}/database/backups/scheduled`}
           icon={<Archive size={18} strokeWidth={1.5} className="text-foreground" />}
           label={<span>Last backup</span>}
           trackingProperties={{
@@ -94,7 +96,9 @@ export const ActivityStats = () => {
             stat_value: backupsData?.backups?.length ?? 0,
           }}
           value={
-            isLoadingBackups ? (
+            STUDIO_AUTH_MANAGER ? (
+              <p className="text-foreground-lighter">Operator managed</p>
+            ) : isLoadingBackups ? (
               <Skeleton className="h-6 w-24" />
             ) : backupsData?.pitr_enabled ? (
               <p>PITR enabled</p>
@@ -112,7 +116,7 @@ export const ActivityStats = () => {
         />
 
         <SingleStat
-          href={`/project/${ref}/branches`}
+          href={STUDIO_AUTH_MANAGER ? undefined : `/project/${ref}/branches`}
           icon={<GitBranch size={18} strokeWidth={1.5} className="text-foreground" />}
           label={<span>{isDefaultProject ? 'Recent branch' : 'Branch Created'}</span>}
           trackingProperties={{
@@ -120,7 +124,9 @@ export const ActivityStats = () => {
             stat_value: branchesData?.length ?? 0,
           }}
           value={
-            isLoadingBranches ? (
+            STUDIO_AUTH_MANAGER ? (
+              <p className="text-foreground-lighter">Not available in self-hosted</p>
+            ) : isLoadingBranches ? (
               <Skeleton className="h-6 w-24" />
             ) : isDefaultProject ? (
               <p

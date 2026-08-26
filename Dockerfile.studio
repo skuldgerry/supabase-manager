@@ -36,37 +36,34 @@ COPY --from=turbo /app/out/full ./
 # Functions editor imports as raw text. Keep the upstream files verbatim.
 COPY studio-ui/apps/studio/public/deno/ ./apps/studio/public/deno/
 
-# Multi-Head uses GoTrue-backed manager authentication. This will be replaced
-# by the broker session adapter after the UI parity milestone.
-ARG NEXT_PUBLIC_STUDIO_AUTH=gotrue
+# Manager authentication is local to the control plane. Child Supabase stacks
+# retain their own independent Auth services.
+ARG NEXT_PUBLIC_STUDIO_AUTH=manager
 ENV NEXT_PUBLIC_STUDIO_AUTH=${NEXT_PUBLIC_STUDIO_AUTH}
-ENV NODE_OPTIONS="--max-old-space-size=3072"
+ENV NODE_OPTIONS="--max-old-space-size=3600" \
+  NEXT_TELEMETRY_DISABLED=1 \
+  NEXT_BUILD_CPUS=1
 
 RUN pnpm --filter studio exec next build --webpack
-
-FROM docker:27-cli AS docker-tools
-RUN set -e; \
-  plugin=$(find /usr -name docker-compose -type f 2>/dev/null | head -1); \
-  test -n "$plugin"; \
-  cp "$plugin" /docker-compose
 
 FROM base AS production
 COPY --from=builder /app/apps/studio/public ./apps/studio/public
 COPY --from=builder /app/apps/studio/.next/standalone ./
 COPY --from=builder /app/apps/studio/.next/static ./apps/studio/.next/static
 
-# Retained temporarily because the UI baseline still contains Multi-Head's
-# project APIs. The final UI image will not mount docker.sock; only the broker
-# will have Docker access.
-COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker-tools /docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
-COPY studio-ui/docker/docker-compose.yml /app/supabase-docker/docker-compose.yml
-COPY studio-ui/docker/volumes/ /app/supabase-docker/volumes/
+COPY scripts/studio-entrypoint.sh /usr/local/bin/supabase-manager-studio-entrypoint
+RUN chmod 0755 /usr/local/bin/supabase-manager-studio-entrypoint \
+  && mkdir -p /data
 
-ENV SUPABASE_COMPOSE_FILE=/app/supabase-docker/docker-compose.yml
+ENV NODE_ENV=production \
+  STUDIO_DATA_DIR=/data \
+  MANAGER_BROKER_URL=http://broker:3001 \
+  MANAGER_INTERNAL_TOKEN_FILE=/run/supabase-manager/internal-token \
+  NEXT_PUBLIC_STUDIO_AUTH=manager
 
 EXPOSE 3000
-ENTRYPOINT ["docker-entrypoint.sh"]
+VOLUME ["/data"]
+ENTRYPOINT ["/usr/local/bin/supabase-manager-studio-entrypoint"]
 HEALTHCHECK --interval=5s --timeout=5s --retries=3 \
   CMD node -e "fetch('http://localhost:3000/api/self-hosted/session').then((response) => { if (response.status !== 200) throw new Error(response.status) })"
 CMD ["node", "apps/studio/server.js"]

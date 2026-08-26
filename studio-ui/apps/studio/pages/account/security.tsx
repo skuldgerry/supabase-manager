@@ -16,6 +16,7 @@ import {
 } from 'ui-patterns/PageHeader'
 
 import { TOTPFactors } from '@/components/interfaces/Account/TOTPFactors'
+import { ManagerMfaPanel } from '@/components/interfaces/Account/ManagerMfaPanel'
 import AccountLayout from '@/components/layouts/AccountLayout/AccountLayout'
 import { AppLayout } from '@/components/layouts/AppLayout/AppLayout'
 import { DefaultLayout } from '@/components/layouts/DefaultLayout'
@@ -38,10 +39,20 @@ const collapsibleClasses = [
 ]
 
 const Security: NextPageWithLayout = () => {
+  const managerAuth = process.env.NEXT_PUBLIC_STUDIO_AUTH === 'manager'
   const showSecuritySettings = useIsFeatureEnabled('account:show_security_settings')
+  const { data } = useMfaListFactorsQuery({ enabled: !managerAuth && showSecuritySettings })
 
-  const { data } = useMfaListFactorsQuery({ enabled: showSecuritySettings })
-
+  if (managerAuth) {
+    return (
+      <>
+        <PageHeader size="small">
+          <PageHeaderMeta><PageHeaderSummary><PageHeaderTitle>Security</PageHeaderTitle><PageHeaderDescription>Manage your account security settings and authentication methods.</PageHeaderDescription></PageHeaderSummary></PageHeaderMeta>
+        </PageHeader>
+        <PageContainer size="small"><ManagerMfaPanel /></PageContainer>
+      </>
+    )
+  }
   if (!showSecuritySettings) {
     return <UnknownInterface urlBack={`/account/me`} />
   }

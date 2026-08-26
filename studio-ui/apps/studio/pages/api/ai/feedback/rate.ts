@@ -104,6 +104,7 @@ export async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     const { modelParams, error: modelError } = await getModel({
       provider: 'openai',
       modelEntry: DEFAULT_COMPLETION_MODEL,
+      managerProjectRef: projectRef,
     })
 
     if (modelError) {

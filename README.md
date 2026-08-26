@@ -9,6 +9,11 @@ login, organizations, project switching, per-project ports and initial secrets,
 named volumes, durable provisioning progress, and retrievable encrypted
 credentials.
 
+The V1 deployment has two control-plane containers. `manager` serves the
+Studio-based UI and never receives the Docker socket. `broker` owns lifecycle
+operations and is the only service with access to Docker. They share only a
+generated internal authentication token through a named volume.
+
 The official stack's internal `postgres` role remains unchanged for
 compatibility. The configurable usernames in the first release are the manager
 administrator identity and each project's Studio login; creating a differently
@@ -30,23 +35,45 @@ tag can also be entered and is structurally validated before provisioning.
 Image versions remain owned by the selected upstream release. The manager
 generates only the project environment and named-volume override.
 
+## Existing projects
+
+V1 can import an official Supabase Compose deployment running on the same
+Docker Engine. The broker verifies that the published API port belongs to one
+Compose project and that the supplied credentials match its containers before
+registering it. Imported deployments remain externally owned: manager
+lifecycle and deletion operations never stop or remove their containers,
+networks, or volumes.
+
+Remote Docker hosts will be supported through a future agent. Until then,
+deploy Supabase Manager on the Docker host that owns the project being
+imported.
+
+Supabase Cloud preview branches are not part of the official self-hosted
+stack. Database backups are operator-managed in V1; the manager does not imply
+that Cloud backup or PITR services are available.
+
 ## Run
 
-Use the published image with [compose.yml](./compose.yml). The manager requires
-a Linux Docker Engine and access to its Docker socket.
+Use the published release-candidate images with [compose.yml](./compose.yml).
+The broker requires a Linux Docker Engine and access to its Docker socket.
+The Studio manager does not mount the socket.
 
-The current development image is `skuldgerry/supabase-manager:0.1.2-dev`.
-Development tags are published for testing and do not move `latest`.
+The V1 release candidate uses:
+
+- `skuldgerry/supabase-manager:1.0.0-rc.1` for the Studio manager;
+- `skuldgerry/supabase-manager:1.0.0-rc.1-broker` for the broker.
+
+Prerelease tags do not move `latest`.
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-Open `http://localhost:3000`, create the first administrator, create an
-organization, and deploy a project. See [deployment documentation](./docs/deployment.md)
-and the [architecture](./docs/architecture.md) for security and operational
-details.
+Open `http://localhost:3000`, create the first administrator, create or select
+an organization, and deploy or import a project. See
+[deployment documentation](./docs/deployment.md) and the
+[architecture](./docs/architecture.md) for security and operational details.
 
 ## Development
 
@@ -58,6 +85,7 @@ npm run lint
 npm run build
 ```
 
-Do not expose the manager UI directly to the public internet. The mounted
-Docker socket gives it control of the local engine, and the credentials page can
-reveal project secrets to authenticated organization users.
+Do not expose the manager UI directly to the public internet. Although only the
+broker mounts the Docker socket, authenticated manager administrators can issue
+privileged lifecycle requests and reveal project secrets. Protect the host and
+back up all three manager volumes.

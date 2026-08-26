@@ -35,6 +35,7 @@ const nextConfig = {
   output: 'standalone',
   experimental: {
     clientRouterFilter: false,
+    cpus: process.env.NEXT_BUILD_CPUS ? parseInt(process.env.NEXT_BUILD_CPUS, 10) : undefined,
     webpackBuildWorker: true,
     webpackMemoryOptimizations: true,
   },

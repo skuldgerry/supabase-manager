@@ -9,6 +9,12 @@ manager generates the project-specific environment and Compose override,
 including host ports, credentials, immutable Docker identity, and named
 volumes.
 
+The control plane is split into a Studio-based `manager` UI and a private
+`broker`. Only the broker mounts the Docker socket and stores canonical
+credentials and lifecycle state. Studio authenticates to it with a generated
+token held in a read-only shared volume; the token also provides one persistent
+session-signing secret across manager restarts.
+
 ## Identity and tenancy
 
 The first account created during setup becomes the initial administrator. Users
@@ -32,6 +38,13 @@ Host port reservations are acquired before provisioning and are unique per host,
 bind address, and port while held or active. Reservations are released when a
 deployment is rolled back or deleted. Internal Supabase container ports remain
 the official ports; user-selected values affect only host publishing.
+
+Existing same-host Compose projects can be adopted as externally owned
+projects. Adoption proves that the selected published API port belongs to one
+Compose project and that the supplied keys/password match container
+environment values. Externally owned projects are never paused, restarted, or
+removed by the broker; deleting their manager record changes control-plane
+metadata only.
 
 ## Credentials
 

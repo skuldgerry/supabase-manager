@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation';
 import {
   createOrganizationAction,
   createProjectAction,
+  importProjectAction,
   loginAction,
   logoutAction,
   revealProjectCredentialsAction,
   setupAdminAction,
 } from '@/app/actions';
 
-type Screen = 'dashboard' | 'wizard' | 'deployment' | 'credentials' | 'setup' | 'login';
+type Screen = 'dashboard' | 'wizard' | 'import' | 'deployment' | 'credentials' | 'setup' | 'login';
 type WizardStep = 1 | 2 | 3;
 
 export type OrganizationSummary = { id: string; name: string; initials: string; role: string };
@@ -20,6 +21,7 @@ export type ProjectSummary = {
   organizationId: string;
   name: string;
   status: string;
+  ownership: 'manager-owned' | 'external';
   publicUrl: string;
   apiPort: number;
   databaseSessionPort: number;
@@ -124,17 +126,54 @@ function Topbar({ title, organization, user, onHelp }: { title: string; organiza
   return <header className="topbar"><div className="breadcrumbs"><span>{organization.name}</span><span className="slash">/</span><strong>{title}</strong></div><div className="top-actions"><button className="icon-btn" aria-label="Help" onClick={onHelp}>?</button><button className="icon-btn" aria-label="Notifications">♢</button><span className="user-avatar">{initials}</span></div></header>;
 }
 
-function Dashboard({ organization, projects, onCreate, onSelect }: { organization: OrganizationSummary; projects: ProjectSummary[]; onCreate: () => void; onSelect: (projectId: string) => void }) {
+function Dashboard({ organization, projects, onCreate, onImport, onSelect }: { organization: OrganizationSummary; projects: ProjectSummary[]; onCreate: () => void; onImport: () => void; onSelect: (projectId: string) => void }) {
   return <>
-    <div className="page-heading cloud-heading"><div><h1>Projects</h1><p>Manage your self-hosted Supabase projects in {organization.name}.</p></div><button className="btn btn-primary" onClick={onCreate}>＋ New project</button></div>
-    {projects.length === 0 ? <section className="section-card"><div className="empty-state"><div className="empty-graphic">⌁</div><h2>No projects yet</h2><p>Create an isolated official Supabase stack with its own database, Auth, Storage, Realtime, and Studio services.</p><button className="btn btn-primary" onClick={onCreate}>Create a new project</button></div></section> : <div className="project-grid">{projects.map((project) => {
+    <div className="page-heading cloud-heading"><div><h1>Projects</h1><p>Manage your self-hosted Supabase projects in {organization.name}.</p></div><div style={{ display: 'flex', gap: 9 }}><button className="btn btn-secondary" onClick={onImport}>＋ Import project</button><button className="btn btn-primary" onClick={onCreate}>＋ New project</button></div></div>
+    {projects.length === 0 ? <section className="section-card"><div className="empty-state"><div className="empty-graphic">⌁</div><h2>No projects yet</h2><p>Create an isolated official Supabase stack or adopt an existing self-hosted project without touching its Docker resources.</p><div style={{ display: 'flex', justifyContent: 'center', gap: 9 }}><button className="btn btn-primary" onClick={onCreate}>Create a new project</button><button className="btn btn-secondary" onClick={onImport}>Import existing project</button></div></div></section> : <div className="project-grid">{projects.map((project) => {
       const ready = project.status === 'ready';
       return <article className="cloud-project-card" key={project.id}>
-        <div className="project-card-body"><div className="project-card-title"><span className={`health-dot ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`} /><h2>{project.name}</h2><button className="card-menu" aria-label={`Actions for ${project.name}`} onClick={() => onSelect(project.id)}>•••</button></div><div className="project-card-meta"><span className={`project-badge ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`}>{project.status}</span><code>{project.id.slice(0, 8)}</code></div><div className="service-list"><div><span className="health-dot" />API / {project.release.startsWith('self-hosted/v0.7.') ? 'Kong' : 'Envoy'} <code>:{project.apiPort}</code></div><div><span className="health-dot" />Session pooler <code>:{project.databaseSessionPort}</code></div><div><span className="health-dot" />Transaction pooler <code>:{project.databaseTransactionPort}</code></div><div><span className="release-dot" />{project.release}</div></div></div>
+        <div className="project-card-body"><div className="project-card-title"><span className={`health-dot ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`} /><h2>{project.name}</h2><button className="card-menu" aria-label={`Actions for ${project.name}`} onClick={() => onSelect(project.id)}>•••</button></div><div className="project-card-meta"><span className={`project-badge ${project.status === 'failed' ? 'red' : ready ? '' : 'amber'}`}>{project.status}</span><span className="project-badge">{project.ownership === 'external' ? 'External' : 'Manager-owned'}</span><code>{project.id.slice(0, 8)}</code></div><div className="service-list"><div><span className="health-dot" />API / {project.release.startsWith('self-hosted/v0.7.') ? 'Kong' : 'Envoy'} <code>:{project.apiPort}</code></div><div><span className="health-dot" />Session pooler <code>:{project.databaseSessionPort}</code></div><div><span className="health-dot" />Transaction pooler <code>:{project.databaseTransactionPort}</code></div><div><span className="release-dot" />{project.release}</div></div></div>
         <div className="project-card-footer"><button className="btn btn-secondary" disabled={!ready} onClick={() => window.open(project.publicUrl, '_blank', 'noopener,noreferrer')}>Open Studio</button><button className="btn btn-secondary" onClick={() => onSelect(project.id)}>Credentials</button></div>
       </article>;
     })}</div>}
   </>;
+}
+
+function ImportProject({ organization, onCancel }: { organization: OrganizationSummary; onCancel: () => void }) {
+  const [state, formAction, pending] = useActionState(importProjectAction, {});
+  return <div className="wizard-shell">
+    <div className="page-heading"><div><div className="eyebrow">Import project</div><h1>Adopt an existing Supabase stack</h1><p>Register a running self-hosted project. The manager will not create, stop, or delete its Docker resources.</p></div></div>
+    <section className="wizard-panel">
+      <form action={formAction}>
+        <input type="hidden" name="organizationId" value={organization.id} />
+        <h2>Project connection</h2><p>Use the public gateway URL and the database connection details exposed by the existing stack.</p>
+        <div className="form-grid">
+          <div className="field"><label htmlFor="import-name">Project name</label><input id="import-name" name="name" placeholder="Customer portal" required /></div>
+          <div className="field"><label htmlFor="import-release">Supabase release tag</label><input id="import-release" name="supabaseRelease" defaultValue="self-hosted/v0.8.0" required /></div>
+          <div className="field"><label htmlFor="import-api-url">API / gateway URL</label><input id="import-api-url" name="apiUrl" type="url" placeholder="https://supabase.example.com" required /></div>
+          <div className="field"><label htmlFor="import-site-url">Site URL (optional)</label><input id="import-site-url" name="siteUrl" type="url" placeholder="https://app.example.com" /></div>
+          <div className="field"><label htmlFor="import-db-host">Database host</label><input id="import-db-host" name="dbHost" placeholder="db.example.com" required /></div>
+          <div className="field"><label htmlFor="import-db-port">PostgreSQL port</label><input id="import-db-port" name="dbPort" type="number" defaultValue="5432" min="1" max="65535" required /></div>
+          <div className="field"><label htmlFor="import-session-port">Session pooler port</label><input id="import-session-port" name="databaseSessionPort" type="number" placeholder="5432" min="1" max="65535" required /></div>
+          <div className="field"><label htmlFor="import-transaction-port">Transaction pooler port</label><input id="import-transaction-port" name="databaseTransactionPort" type="number" placeholder="6543" min="1" max="65535" required /></div>
+        </div>
+        <h2 style={{ marginTop: 25 }}>Credentials</h2><p>These values are encrypted before persistence and are never sent to Docker or written to job events.</p>
+        <div className="form-grid">
+          <div className="field"><label htmlFor="import-dashboard-user">Studio username</label><input id="import-dashboard-user" name="dashboardUsername" defaultValue="supabase" required /></div>
+          <div className="field"><label htmlFor="import-dashboard-password">Studio password</label><input id="import-dashboard-password" name="dashboardPassword" type="password" minLength={12} required /></div>
+          <div className="field"><label htmlFor="import-postgres-password">PostgreSQL password</label><input id="import-postgres-password" name="postgresPassword" type="password" minLength={12} required /></div>
+          <div className="field"><label htmlFor="import-jwt">JWT secret</label><input id="import-jwt" name="jwtSecret" type="password" minLength={32} required /></div>
+          <div className="field"><label htmlFor="import-anon">ANON_KEY</label><input id="import-anon" name="anonKey" className="mono" required /></div>
+          <div className="field"><label htmlFor="import-service">SERVICE_ROLE_KEY</label><input id="import-service" name="serviceRoleKey" className="mono" required /></div>
+          <div className="field"><label htmlFor="import-publishable">Publishable key (optional)</label><input id="import-publishable" name="publishableKey" className="mono" /></div>
+          <div className="field"><label htmlFor="import-secret">Secret key (optional)</label><input id="import-secret" name="secretKey" className="mono" /></div>
+        </div>
+        <div className="security-note">Connectivity is not probed by the manager broker because user-supplied endpoints must not be used for server-side network probing. Confirm the endpoint from the imported project before registering it.</div>
+        {state.error && <div className="form-error form-error-spaced" role="alert">{state.error}</div>}
+        <div className="wizard-footer"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button type="submit" className="btn btn-primary" disabled={pending}>{pending ? 'Registering…' : 'Import project'}</button></div>
+      </form>
+    </section>
+  </div>;
 }
 
 type WizardOptions = {
@@ -390,7 +429,7 @@ export default function ManagerShell({ initialScreen, user, organizations, proje
   if (organizations.length === 0) return <main className="auth-screen"><div className="auth-card"><Brand /><div className="eyebrow">First organization</div><h1>Create your workspace</h1><p>Projects and access permissions are grouped inside organizations.</p><form action={createOrganizationAction}><div className="field"><label>Organization name</label><input name="name" placeholder="Acme Labs" required /></div><button className="btn btn-primary btn-wide">Create organization</button></form><form action={logoutAction}><button className="btn btn-link btn-wide" style={{ marginTop: 18 }}>Sign out</button></form></div></main>;
   const organization = organizations.find((item) => item.id === organizationId) ?? organizations[0]!;
   const organizationProjects = projects.filter((project) => project.organizationId === organization.id);
-  const title = screen === 'deployment' ? 'Deployment' : screen === 'credentials' ? 'Credentials' : 'Projects';
+  const title = screen === 'deployment' ? 'Deployment' : screen === 'credentials' ? 'Credentials' : screen === 'import' ? 'Import project' : 'Projects';
   const selectedProject = organizationProjects.find((project) => project.id === selectedProjectId) ?? organizationProjects[0];
-  return <div className="app-shell"><Sidebar screen={screen} setScreen={setScreen} organization={organization} user={user} onOrgMenu={() => setOrgMenu(!orgMenu)} />{orgMenu && <div className="switcher-menu">{organizations.map((org) => <button className={org.id === organization.id ? 'active' : ''} key={org.id} onClick={() => { setOrganizationId(org.id); setSelectedProjectId(projects.find((project) => project.organizationId === org.id)?.id ?? ''); setOrgMenu(false); setScreen('dashboard'); }}>{org.id === organization.id ? '✓ ' : ''}{org.name}</button>)}<form action={createOrganizationAction}><input name="name" placeholder="New organization" required /><button>＋ Create organization</button></form></div>}<main className="main"><Topbar title={title} organization={organization} user={user} onHelp={() => window.alert('Need help? Check the deployment diagnostics or project documentation.')} /><div className="content">{(screen === 'dashboard' || screen === 'wizard') && <Dashboard organization={organization} projects={organizationProjects} onCreate={() => { setWizardStep(1); setScreen('wizard'); }} onSelect={(projectId) => { setSelectedProjectId(projectId); setScreen('credentials'); }} />}{screen === 'wizard' && <Wizard organization={organization} step={wizardStep} setStep={setWizardStep} onCancel={() => setScreen('dashboard')} />}{screen === 'deployment' && <Deployment job={activeJob} onCredentials={() => { if (activeJob?.projectId) setSelectedProjectId(activeJob.projectId); setScreen('credentials'); }} />}{screen === 'credentials' && <Credentials project={selectedProject} />}</div></main></div>;
+  return <div className="app-shell"><Sidebar screen={screen} setScreen={setScreen} organization={organization} user={user} onOrgMenu={() => setOrgMenu(!orgMenu)} />{orgMenu && <div className="switcher-menu">{organizations.map((org) => <button className={org.id === organization.id ? 'active' : ''} key={org.id} onClick={() => { setOrganizationId(org.id); setSelectedProjectId(projects.find((project) => project.organizationId === org.id)?.id ?? ''); setOrgMenu(false); setScreen('dashboard'); }}>{org.id === organization.id ? '✓ ' : ''}{org.name}</button>)}<form action={createOrganizationAction}><input name="name" placeholder="New organization" required /><button>＋ Create organization</button></form></div>}<main className="main"><Topbar title={title} organization={organization} user={user} onHelp={() => window.alert('Need help? Check the deployment diagnostics or project documentation.')} /><div className="content">{screen === 'dashboard' && <Dashboard organization={organization} projects={organizationProjects} onCreate={() => { setWizardStep(1); setScreen('wizard'); }} onImport={() => setScreen('import')} onSelect={(projectId) => { setSelectedProjectId(projectId); setScreen('credentials'); }} />}{screen === 'wizard' && <Wizard organization={organization} step={wizardStep} setStep={setWizardStep} onCancel={() => setScreen('dashboard')} />}{screen === 'import' && <ImportProject organization={organization} onCancel={() => setScreen('dashboard')} />}{screen === 'deployment' && <Deployment job={activeJob} onCredentials={() => { if (activeJob?.projectId) setSelectedProjectId(activeJob.projectId); setScreen('credentials'); }} />}{screen === 'credentials' && <Credentials project={selectedProject} />}</div></main></div>;
 }

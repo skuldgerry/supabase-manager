@@ -45,7 +45,8 @@ export async function executeQuery<T = unknown>({
 }: QueryOptions): Promise<WrappedResult<T[]>> {
   assertSelfHosted()
 
-  if (!PG_META_URL) {
+  const initialProxy = getPgMetaProxyConfig(ref)
+  if (!PG_META_URL && !initialProxy.projectHeaders) {
     return {
       data: undefined,
       error: new Error(
@@ -56,13 +57,13 @@ export async function executeQuery<T = unknown>({
 
   // pgMetaBase: which pg-meta URL to call for this request
   // connectionHeaders: additional headers (x-connection-encrypted or Kong auth)
-  let pgMetaBase = PG_META_URL
+  let pgMetaBase = PG_META_URL as string
   let connectionHeaders: Record<string, string> = {}
 
   if (ref && ref !== 'default') {
     const project = getStoredProjectByRef(ref)
     if (project) {
-      if (project.kong_http_port) {
+      if (project.broker_project_id || project.kong_http_port) {
         // Docker-orchestrated project: each stack has its own pg-meta exposed behind
         // Kong on {MULTI_HEAD_HOST}:{kongPort}/pg. Route directly — no x-connection-encrypted
         // needed (avoids supavisor SCRAM-SHA-256 auth issues on external connections).

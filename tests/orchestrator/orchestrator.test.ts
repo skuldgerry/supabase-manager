@@ -16,6 +16,7 @@ import {
   volumePlan,
 } from "../../src/lib/orchestrator/index.js";
 import { legacyJwt, patchEnv, projectPublicEnvironment, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
+import { validateExternalAdoption } from "../../src/lib/orchestrator/external-adoption.js";
 
 const projectId = asProjectId("11111111-1111-4111-8111-111111111111");
 
@@ -158,4 +159,30 @@ test("Compose version checks handle v-prefixed and major releases", () => {
   assert.equal(versionAtLeast("v2.24.4", "2.24.4"), true);
   assert.equal(versionAtLeast("2.23.9", "2.24.4"), false);
   assert.equal(versionAtLeast("5.0.1", "2.24.4"), true);
+});
+
+test("external adoption validates compatibility and never probes the supplied host", () => {
+  const result = validateExternalAdoption({
+    apiUrl: "https://supabase.example.com",
+    dbHost: "db.example.com",
+    dbPort: 5432,
+    anonKey: "header.payload.signature-long-enough",
+    serviceRoleKey: "header.payload.signature-long-enough",
+    postgresPassword: "postgres-password-123",
+    dashboardPassword: "dashboard-password-123",
+    jwtSecret: "jwt-secret-that-is-at-least-32-characters-long",
+    release: "self-hosted/v0.8.0",
+  });
+  assert.deepEqual(result, { connectivity: "not-probed", compatibility: "compatible" });
+  assert.throws(() => validateExternalAdoption({
+    apiUrl: "file:///etc/passwd",
+    dbHost: "db.example.com",
+    dbPort: 5432,
+    anonKey: "header.payload.signature-long-enough",
+    serviceRoleKey: "header.payload.signature-long-enough",
+    postgresPassword: "postgres-password-123",
+    dashboardPassword: "dashboard-password-123",
+    jwtSecret: "jwt-secret-that-is-at-least-32-characters-long",
+    release: "self-hosted/v0.8.0",
+  }), /HTTP or HTTPS/);
 });

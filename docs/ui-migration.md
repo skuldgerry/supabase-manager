@@ -33,11 +33,15 @@ optimization enabled. This is a build-only accommodation for smaller
 self-hosted builders and does not alter the vendored UI behavior or
 presentation.
 
-During the visual-parity milestone, the Studio image still contains the
-Multi-Head backend adapters so every reference route can render. Those adapters
-will subsequently be replaced with private server-to-server calls to the
-broker. The public project API and database ports will remain independent; the
-manager will not become a public reverse proxy for project traffic.
+Manager authentication, organizations, project creation/import, credentials,
+deployment progress, health, lifecycle operations, transfer, AI settings, and
+deletion now use private server-to-server calls to the broker. The public
+project API and database ports remain independent; the manager is not a public
+reverse proxy for project traffic.
+
+Cloud-only preview branching and platform backup routes are disabled in
+manager mode. V1 presents their self-hosted availability explicitly rather
+than leaving Cloud queries pending or linking to non-functional pages.
 
 ## Build the UI image
 

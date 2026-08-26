@@ -8,7 +8,8 @@ import { hashPassword, verifyPassword } from "@/lib/security/password";
 import { decryptJson, encryptJson, getMasterKey, type EncryptedEnvelope } from "@/lib/security/encryption";
 import { scheduleProvisioning } from "@/lib/orchestrator/broker";
 import { adapterForRelease, discoverProjectPorts } from "@/lib/orchestrator";
-import { loginSchema, organizationSchema, projectCreationSchema, setupAdminSchema } from "@/lib/validation";
+import { loginSchema, organizationSchema, projectCreationSchema, projectImportSchema, setupAdminSchema } from "@/lib/validation";
+import { validateExternalAdoption } from "@/lib/orchestrator/external-adoption";
 
 export type FormActionState = { error?: string };
 export type RevealedProjectCredentials = {
@@ -196,6 +197,90 @@ export async function createProjectAction(
   redirect(`/?job=${jobId}`);
 }
 
+/** Register an existing stack as external; this action never provisions Docker resources. */
+export async function importProjectAction(
+  _state: FormActionState,
+  formData: FormData,
+): Promise<FormActionState> {
+  const authenticated = await getAuthenticatedSession();
+  if (!authenticated) return { error: "Your session has expired. Sign in again." };
+  const parsed = projectImportSchema.safeParse({
+    organizationId: formString(formData, "organizationId"),
+    name: formString(formData, "name"),
+    apiUrl: formString(formData, "apiUrl"),
+    siteUrl: formString(formData, "siteUrl") || undefined,
+    dbHost: formString(formData, "dbHost"),
+    dbPort: Number(formString(formData, "dbPort") || 5432),
+    databaseSessionPort: Number(formString(formData, "databaseSessionPort")),
+    databaseTransactionPort: Number(formString(formData, "databaseTransactionPort")),
+    supabaseRelease: formString(formData, "supabaseRelease") || "self-hosted/v0.8.0",
+    dashboardUsername: formString(formData, "dashboardUsername"),
+    postgresPassword: formString(formData, "postgresPassword"),
+    dashboardPassword: formString(formData, "dashboardPassword"),
+    jwtSecret: formString(formData, "jwtSecret"),
+    anonKey: formString(formData, "anonKey"),
+    serviceRoleKey: formString(formData, "serviceRoleKey"),
+    publishableKey: formString(formData, "publishableKey") || undefined,
+    secretKey: formString(formData, "secretKey") || undefined,
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid import details." };
+  try {
+    validateExternalAdoption({
+      apiUrl: parsed.data.apiUrl,
+      dbHost: parsed.data.dbHost,
+      dbPort: parsed.data.dbPort,
+      anonKey: parsed.data.anonKey,
+      serviceRoleKey: parsed.data.serviceRoleKey,
+      postgresPassword: parsed.data.postgresPassword,
+      dashboardPassword: parsed.data.dashboardPassword,
+      jwtSecret: parsed.data.jwtSecret,
+      release: parsed.data.supabaseRelease,
+    });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "The external project could not be validated." };
+  }
+  const repository = getRepository();
+  const host = repository.listHosts()[0];
+  if (!host) return { error: "No manager host is registered." };
+  const projectSlug = slugify(parsed.data.name);
+  try {
+    const project = repository.adoptExternalProject({
+      organizationId: parsed.data.organizationId as OrganizationId,
+      hostId: host.id,
+      name: parsed.data.name,
+      slug: projectSlug,
+      stackRelease: parsed.data.supabaseRelease,
+      publicUrl: parsed.data.apiUrl,
+      siteUrl: parsed.data.siteUrl ?? parsed.data.apiUrl,
+      ports: { api: (() => { const url = new URL(parsed.data.apiUrl); return url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80; })(), dbSession: parsed.data.databaseSessionPort, dbTransaction: parsed.data.databaseTransactionPort },
+      databaseUsername: "postgres",
+      dashboardUsername: parsed.data.dashboardUsername,
+      createdBy: authenticated.user.id,
+      ownership: "external",
+    });
+    const associatedData = `${project.id}:project-credentials`;
+    const values = {
+      POSTGRES_PASSWORD: parsed.data.postgresPassword,
+      JWT_SECRET: parsed.data.jwtSecret,
+      ANON_KEY: parsed.data.anonKey,
+      SERVICE_ROLE_KEY: parsed.data.serviceRoleKey,
+      SUPABASE_PUBLISHABLE_KEY: parsed.data.publishableKey ?? parsed.data.anonKey,
+      SUPABASE_SECRET_KEY: parsed.data.secretKey ?? parsed.data.serviceRoleKey,
+      DASHBOARD_USERNAME: parsed.data.dashboardUsername,
+      DASHBOARD_PASSWORD: parsed.data.dashboardPassword,
+      DB_HOST: parsed.data.dbHost,
+      DB_PORT: String(parsed.data.dbPort),
+      DB_SESSION_PORT: String(parsed.data.databaseSessionPort),
+      DB_TRANSACTION_PORT: String(parsed.data.databaseTransactionPort),
+    };
+    const envelope = encryptJson(values, await getMasterKey(), associatedData);
+    repository.upsertCredential({ projectId: project.id, kind: "other", name: "project-credentials", ciphertextBase64: envelope.ciphertext, nonceBase64: envelope.iv, authTagBase64: envelope.tag, associatedData });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "The external project could not be registered." };
+  }
+  redirect("/");
+}
+
 export async function revealProjectCredentialsAction(projectIdValue: string): Promise<RevealCredentialsResult> {
   const authenticated = await getAuthenticatedSession();
   if (!authenticated) return { error: "Your session has expired. Sign in again." };
@@ -216,12 +301,13 @@ export async function revealProjectCredentialsAction(projectIdValue: string): Pr
       ciphertext: stored.ciphertextBase64,
     };
     const values = decryptJson<Record<string, string>>(envelope, await getMasterKey(), stored.associatedData);
-    const hostname = new URL(project.publicUrl).hostname;
+    const hostname = values.DB_HOST || new URL(project.publicUrl).hostname;
+    const databasePort = values.DB_PORT || String(project.ports.dbSession);
     return { credentials: {
       url: project.publicUrl,
       publishable: values.SUPABASE_PUBLISHABLE_KEY,
       secret: values.SUPABASE_SECRET_KEY,
-      database: `postgresql://postgres:${encodeURIComponent(values.POSTGRES_PASSWORD)}@${hostname}:${project.ports.dbSession}/postgres`,
+      database: `postgresql://${encodeURIComponent(values.DB_USER || "postgres")}:${encodeURIComponent(values.POSTGRES_PASSWORD)}@${hostname}:${databasePort}/postgres`,
       jwt: values.JWT_SECRET,
       dashboard: `${project.dashboardUsername}:${values.DASHBOARD_PASSWORD}`,
     } };

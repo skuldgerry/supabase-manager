@@ -2,8 +2,17 @@ import crypto from 'node:crypto'
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import apiWrapper from '@/lib/api/apiWrapper'
-import { STUDIO_AUTH_GOTRUE } from '@/lib/constants'
+import { STUDIO_AUTH_GOTRUE, STUDIO_AUTH_MANAGER } from '@/lib/constants'
 import { getGoTrueAuthMember } from '@/lib/api/self-hosted/studioGoTrue'
+import { getManagerSessionMember } from '@/lib/api/self-hosted/managerSession'
+import {
+  createManagerBrokerProject,
+  getManagerBrokerOptions,
+  managerOrigin,
+  MANAGER_BROKER_ENABLED,
+} from '@/lib/api/self-hosted/managerBroker'
+import { syncBrokerProjects } from '@/lib/api/self-hosted/brokerProjectSync'
+import { getStoredOrganizationBySlug } from '@/lib/api/self-hosted/organizationsStore'
 import type { StoredMember } from '@/lib/api/self-hosted/membersStore'
 import {
   createStoredProject,
@@ -59,6 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   switch (method) {
     case 'GET':
+      if (req.query.options === '1' && MANAGER_BROKER_ENABLED) return handleGetOptions(req, res)
       return handleGetAll(req, res, authMember)
     case 'POST':
       return handleCreate(req, res)
@@ -68,11 +78,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
+const handleGetOptions = async (req: NextApiRequest, res: NextApiResponse) => {
+  if (!STUDIO_AUTH_MANAGER) return res.status(400).json({ error: 'Manager broker requires manager auth mode' })
+  const member = getManagerSessionMember(req)
+  if (!member) return res.status(401).json({ error: 'Unauthorized' })
+  try {
+    const values = ['api', 'dbSession', 'dbTransaction'] as const
+    const ports = Object.fromEntries(values.flatMap((key) => {
+      const value = req.query[key]
+      return typeof value === 'string' && value ? [[key, Number(value)]] : []
+    })) as { api?: number; dbSession?: number; dbTransaction?: number }
+    return res.status(200).json(await getManagerBrokerOptions({
+      actorEmail: member.primary_email,
+      managerOrigin: managerOrigin(req.headers),
+      ...(Object.keys(ports).length === 3 ? { ports: ports as { api: number; dbSession: number; dbTransaction: number } } : {}),
+    }))
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Project options are unavailable' })
+  }
+}
+
 const handleGetAll = async (
   req: NextApiRequest,
   res: NextApiResponse,
   authMember: StoredMember | null = null
 ) => {
+  await syncBrokerProjects()
   const { limit = '100', offset = '0', search } = req.query
 
   // Standbys and replicas are internal implementation details — hide them from the project list
@@ -105,6 +136,78 @@ const handleCreate = async (req: NextApiRequest, res: NextApiResponse) => {
 
   if (!name?.trim()) {
     return res.status(400).json({ data: null, error: { message: 'Project name is required' } })
+  }
+
+  if (MANAGER_BROKER_ENABLED) {
+    if (!STUDIO_AUTH_MANAGER) {
+      return res.status(500).json({ data: null, error: { message: 'Manager broker requires manager auth mode' } })
+    }
+    if ((creation_mode && creation_mode !== 'stack') || docker_host || cluster_mode || embedded_target_ref) {
+      return res.status(400).json({
+        data: null,
+        error: { message: 'Only standalone projects on this Docker host are available in the broker workflow.' },
+      })
+    }
+    const member = getManagerSessionMember(req)
+    if (!member) return res.status(401).json({ data: null, error: { message: 'Unauthorized' } })
+    const organization = getStoredOrganizationBySlug(organization_slug ?? 'default-org-slug')
+    if (!organization) {
+      return res.status(404).json({ data: null, error: { message: 'Organization not found' } })
+    }
+
+    try {
+      const view = await createManagerBrokerProject({
+        name: name.trim(),
+        actorEmail: member.primary_email,
+        organization: { name: organization.name, slug: organization.slug },
+        managerOrigin: managerOrigin(req.headers),
+        stackRelease: req.body.stack_release ?? 'self-hosted/v0.8.0',
+        publicUrl: req.body.public_url,
+        siteUrl: req.body.site_url,
+        ports: req.body.ports,
+        dashboardUsername: req.body.dashboard_username,
+        customCredentials: req.body.custom_credentials,
+      })
+      if (!view.job) throw new Error('The broker did not return a deployment job')
+      const project = createStoredProject({
+        ref: view.project.id,
+        name: view.project.name,
+        organization_slug: organization.slug,
+        public_url: view.project.publicUrl,
+        postgres_port: view.project.ports.dbSession,
+        kong_http_port: view.project.ports.api,
+        pooler_port: view.project.ports.dbTransaction,
+        pooler_tenant_id: view.project.id.replaceAll('-', ''),
+        docker_project: view.project.dockerProject,
+        db_password: '',
+        anon_key: '',
+        service_key: '',
+        jwt_secret: '',
+        status: 'COMING_UP',
+        broker_project_id: view.project.id,
+        broker_job_id: view.job.id,
+        broker_stage: view.job.stage,
+        broker_error: view.job.errorMessage,
+        stack_release: view.project.stackRelease,
+        ownership: view.project.ownership,
+      })
+      return res.status(202).json({
+        id: project.id,
+        ref: project.ref,
+        name: project.name,
+        organization_id: project.organization_id,
+        organization_slug: project.organization_slug,
+        cloud_provider: project.cloud_provider,
+        status: project.status,
+        region: project.region,
+        inserted_at: project.inserted_at,
+      })
+    } catch (error) {
+      return res.status(400).json({
+        data: null,
+        error: { message: error instanceof Error ? error.message : 'Project could not be queued' },
+      })
+    }
   }
 
   if (cluster_mode) {

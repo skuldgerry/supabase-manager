@@ -14,10 +14,11 @@ import PauseProjectButton from './Infrastructure/PauseProjectButton'
 import RestartServerButton from './Infrastructure/RestartServerButton'
 import { FailoverSection } from './Infrastructure/FailoverSection'
 import { ClusterSection } from './Infrastructure/ClusterSection'
+import { ManagerProjectLifecycle } from './ManagerProjectLifecycle'
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
-import { IS_PLATFORM } from '@/lib/constants'
+import { IS_PLATFORM, STUDIO_AUTH_MANAGER } from '@/lib/constants'
 
 export const Project = () => {
   const { data: project } = useSelectedProjectQuery()
@@ -39,6 +40,9 @@ export const Project = () => {
           </PageSectionSummary>
         </PageSectionMeta>
         <PageSectionContent>
+          {STUDIO_AUTH_MANAGER ? (
+            <ManagerProjectLifecycle />
+          ) : (
           <Card>
             <CardContent>
               <div className="flex flex-col @lg:flex-row @lg:justify-between @lg:items-center gap-4">
@@ -72,11 +76,12 @@ export const Project = () => {
               </div>
             </CardContent>
           </Card>
+          )}
         </PageSectionContent>
       </PageSection>
 
-      {!IS_PLATFORM && <FailoverSection />}
-      {!IS_PLATFORM && <ClusterSection />}
+      {!IS_PLATFORM && !STUDIO_AUTH_MANAGER && <FailoverSection />}
+      {!IS_PLATFORM && !STUDIO_AUTH_MANAGER && <ClusterSection />}
 
       {!isBranch && (
         <PageSection>

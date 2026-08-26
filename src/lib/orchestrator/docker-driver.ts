@@ -49,6 +49,14 @@ export class DockerCliHostDriver implements HostDriver {
     await this.docker(["rm", ...(force ? ["--force"] : []), id]);
   }
 
+  async removeVolume(name: string, force = false): Promise<void> {
+    await this.docker(["volume", "rm", ...(force ? ["--force"] : []), name]);
+  }
+
+  async removeNetwork(name: string): Promise<void> {
+    await this.docker(["network", "rm", name]);
+  }
+
   async compose(spec: ComposeInvocation): Promise<CommandResult> {
     const args = ["compose", ...spec.files.flatMap((file) => ["--file", file]), "--env-file", spec.envFile, "--project-name", spec.projectName, ...(spec.args ?? [])];
     const result = await this.runner.run({ executable: this.executable, args, timeoutMs: 15 * 60_000 });

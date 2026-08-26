@@ -25,6 +25,7 @@ const AccountLayout = ({ children, title }: PropsWithChildren<AccountLayoutProps
   const appSnap = useAppStateSnapshot()
   const { setContent: setMobileSheetContent, registerOpenMenu } = useMobileSheet()
   const currentPath = router.pathname
+  const managerAuth = process.env.NEXT_PUBLIC_STUDIO_AUTH === 'manager'
 
   const showSecuritySettings = useIsFeatureEnabled('account:show_security_settings')
 
@@ -54,7 +55,7 @@ const AccountLayout = ({ children, title }: PropsWithChildren<AccountLayoutProps
 
   const sections = useMemo(
     () =>
-      !IS_PLATFORM
+      !IS_PLATFORM && !managerAuth
         ? [
             {
               key: 'preferences',
@@ -79,14 +80,19 @@ const AccountLayout = ({ children, title }: PropsWithChildren<AccountLayoutProps
                   href: '/account/me',
                   isActive: currentPath === '/account/me',
                 },
-                {
-                  key: 'access-tokens',
-                  label: 'Access Tokens',
-                  href: '/account/tokens',
-                  isActive:
-                    currentPath === '/account/tokens' || currentPath === '/account/tokens/scoped',
-                },
-                ...(showSecuritySettings
+                ...(IS_PLATFORM
+                  ? [
+                      {
+                        key: 'access-tokens',
+                        label: 'Access Tokens',
+                        href: '/account/tokens',
+                        isActive:
+                          currentPath === '/account/tokens' ||
+                          currentPath === '/account/tokens/scoped',
+                      },
+                    ]
+                  : []),
+                ...(managerAuth || showSecuritySettings
                   ? [
                       {
                         key: 'security',
@@ -98,20 +104,24 @@ const AccountLayout = ({ children, title }: PropsWithChildren<AccountLayoutProps
                   : []),
               ],
             },
-            {
-              key: 'logs',
-              heading: 'Logs',
-              links: [
-                {
-                  key: 'audit-logs',
-                  label: 'Audit Logs',
-                  href: '/account/audit',
-                  isActive: currentPath === '/account/audit',
-                },
-              ],
-            },
+            ...(IS_PLATFORM
+              ? [
+                  {
+                    key: 'logs',
+                    heading: 'Logs',
+                    links: [
+                      {
+                        key: 'audit-logs',
+                        label: 'Audit Logs',
+                        href: '/account/audit',
+                        isActive: currentPath === '/account/audit',
+                      },
+                    ],
+                  },
+                ]
+              : []),
           ],
-    [currentPath, showSecuritySettings]
+    [currentPath, managerAuth, showSecuritySettings]
   )
 
   useLayoutEffect(() => {
@@ -124,10 +134,13 @@ const AccountLayout = ({ children, title }: PropsWithChildren<AccountLayoutProps
   }, [registerOpenMenu, setMobileSheetContent, sections])
 
   useEffect(() => {
-    if (!IS_PLATFORM && currentPath !== '/account/me') {
+    const isSupportedSelfHostedPath =
+      currentPath === '/account/me' || (managerAuth && currentPath === '/account/security')
+
+    if (!IS_PLATFORM && !isSupportedSelfHostedPath) {
       router.push('/projects')
     }
-  }, [currentPath, router])
+  }, [currentPath, managerAuth, router])
 
   return (
     <>

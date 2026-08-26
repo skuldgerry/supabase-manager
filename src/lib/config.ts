@@ -8,6 +8,9 @@ const environmentSchema = z.object({
   MANAGER_BIND_ADDRESS: z.string().min(1).default("0.0.0.0"),
   MANAGER_PUBLIC_URL: z.url().default("http://localhost:3000"),
   MANAGER_MASTER_KEY: z.string().optional(),
+  MANAGER_INTERNAL_TOKEN: z.string().min(32).optional(),
+  MANAGER_INTERNAL_TOKEN_FILE: z.string().min(1).optional(),
+  MANAGER_PROJECT_HOST: z.string().trim().regex(/^[a-zA-Z0-9.-]+$/).default("127.0.0.1"),
   DOCKER_SOCKET_PATH: z.string().min(1).default("/var/run/docker.sock"),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
 });
@@ -21,6 +24,9 @@ export type ManagerConfig = {
   bindAddress: string;
   publicUrl: string;
   masterKey?: string;
+  internalToken?: string;
+  internalTokenFile: string;
+  projectHost: string;
   dockerSocketPath: string;
   sessionTtlHours: number;
 };
@@ -32,6 +38,7 @@ export function getConfig(): ManagerConfig {
 
   const env = environmentSchema.parse(process.env);
   const dataDir = path.resolve(
+    /*turbopackIgnore: true*/
     env.MANAGER_DATA_DIR ?? (env.NODE_ENV === "production" ? "/data" : "./data"),
   );
 
@@ -44,6 +51,12 @@ export function getConfig(): ManagerConfig {
     bindAddress: env.MANAGER_BIND_ADDRESS,
     publicUrl: env.MANAGER_PUBLIC_URL,
     masterKey: env.MANAGER_MASTER_KEY || undefined,
+    internalToken: env.MANAGER_INTERNAL_TOKEN || undefined,
+    internalTokenFile: path.resolve(
+      /*turbopackIgnore: true*/
+      env.MANAGER_INTERNAL_TOKEN_FILE ?? path.join(dataDir, "internal-token"),
+    ),
+    projectHost: env.MANAGER_PROJECT_HOST,
     dockerSocketPath: env.DOCKER_SOCKET_PATH,
     sessionTtlHours: env.SESSION_TTL_HOURS,
   };

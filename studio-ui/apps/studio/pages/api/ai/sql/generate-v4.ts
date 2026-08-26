@@ -157,6 +157,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse, claims?: Jw
   } = await getModel({
     provider: 'openai',
     modelEntry: getAssistantModelEntry(effectiveModel),
+    managerProjectRef: projectRef,
   })
 
   if (modelError) {

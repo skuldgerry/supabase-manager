@@ -10,7 +10,7 @@ import { DirectCommandRunner } from "./command-runner";
 import { generateComposeOverride } from "./compose";
 import { boundedDiagnosticText, sanitizeText } from "./diagnostics";
 import { DockerCliHostDriver } from "./docker-driver";
-import { dockerProjectName, projectContainerName } from "./naming";
+import { dockerProjectName, PROJECT_LABEL, projectContainerName } from "./naming";
 import { asProjectId, type CommandRunner } from "./types";
 import { ensureProjectVolumes, type PlannedVolume, type VolumePurpose } from "./volumes";
 
@@ -427,10 +427,12 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     const databaseCheck = await runner.run({ executable: "docker", args: ["exec", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-tAc",
       "SELECT (to_regrole('anon') IS NOT NULL AND to_regrole('authenticated') IS NOT NULL AND to_regrole('service_role') IS NOT NULL AND to_regnamespace('auth') IS NOT NULL AND to_regnamespace('storage') IS NOT NULL AND to_regnamespace('_realtime') IS NOT NULL);"], timeoutMs: 30_000 });
     if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") throw new Error("required Supabase database roles or schemas are missing");
-    const loopback = `http://127.0.0.1:${project.ports.api}`;
-    await checkHttpEndpoint(`${loopback}/auth/v1/health`);
-    await checkHttpEndpoint(`${loopback}/rest/v1/`, { apikey: credentialBundle.ANON_KEY, Authorization: `Bearer ${credentialBundle.ANON_KEY}` });
-    await checkHttpEndpoint(`${loopback}/storage/v1/status`);
+    const projectApi = `http://${getConfig().projectHost}:${project.ports.api}`;
+    const anonHeaders = { apikey: credentialBundle.ANON_KEY, Authorization: `Bearer ${credentialBundle.ANON_KEY}` };
+    const serviceHeaders = { apikey: credentialBundle.SERVICE_ROLE_KEY, Authorization: `Bearer ${credentialBundle.SERVICE_ROLE_KEY}` };
+    await checkHttpEndpoint(`${projectApi}/auth/v1/health`, anonHeaders);
+    await checkHttpEndpoint(`${projectApi}/rest/v1/`, serviceHeaders);
+    await checkHttpEndpoint(`${projectApi}/storage/v1/status`);
 
     repository.activateProjectPorts(project.id);
     repository.updateProjectStatus(project.id, "ready");
@@ -464,6 +466,75 @@ export function scheduleProvisioning(jobId: JobId): void {
   if (activeJobs.has(jobId)) return;
   const promise = Promise.resolve()
     .then(() => runProvisioningJob(jobId))
+    .finally(() => activeJobs.delete(jobId));
+  activeJobs.set(jobId, promise);
+}
+
+export async function runDeletionJob(jobId: JobId): Promise<void> {
+  const repository = getRepository();
+  const job = repository.getJob(jobId);
+  if (!job || !job.projectId || job.type !== "delete-project") return;
+  if (job.status === "succeeded" || job.status === "cancelled") return;
+  const project = repository.getProject(job.projectId);
+  if (!project) return;
+
+  const runner = new DirectCommandRunner();
+  const driver = new DockerCliHostDriver(runner);
+  const labels = { [PROJECT_LABEL]: project.id };
+  const projectDir = path.join(getConfig().dataDir, "projects", project.id);
+  const stage = (next: DeploymentStage, message: string) => {
+    repository.updateJobState(job.id, { status: "running", stage: next });
+    repository.appendJobEvent({ jobId: job.id, stage: next, level: "info", message });
+  };
+
+  try {
+    if (project.ownership === "external") {
+      stage("removing-configuration", "Removing the imported project from this manager");
+      repository.deleteProjectCredentials(project.id);
+      repository.markProjectDeleted(project.id);
+      repository.updateJobState(job.id, { status: "succeeded", stage: "deleted" });
+      repository.appendJobEvent({
+        jobId: job.id,
+        stage: "deleted",
+        level: "info",
+        message: "Imported project registration and encrypted credentials were removed; external containers, volumes, networks, and data were left untouched",
+      });
+      return;
+    }
+
+    stage("stopping-services", "Stopping the project services");
+    const containers = await driver.listContainers(labels);
+
+    stage("removing-containers", `Removing ${containers.length} manager-owned project containers`);
+    for (const container of containers) await driver.removeContainer(container.id, true);
+
+    stage("removing-volumes", "Removing manager-owned project networks and volumes");
+    for (const network of await driver.listNetworks(labels)) await driver.removeNetwork(network.name);
+    const discoveredVolumes = await driver.listVolumes(labels);
+    const recordedVolumes = repository.listProjectVolumes(project.id).map((volume) => volume.dockerName);
+    const volumeNames = [...new Set([...discoveredVolumes.map((volume) => volume.name), ...recordedVolumes])];
+    for (const volumeName of volumeNames) await driver.removeVolume(volumeName, true);
+    repository.markProjectVolumesMissing(project.id);
+
+    stage("removing-configuration", "Removing encrypted credentials and manager-owned project configuration");
+    repository.deleteProjectCredentials(project.id);
+    repository.releaseProjectPorts(project.id);
+    await rm(projectDir, { recursive: true, force: true });
+
+    repository.markProjectDeleted(project.id);
+    repository.updateJobState(job.id, { status: "succeeded", stage: "deleted" });
+    repository.appendJobEvent({ jobId: job.id, stage: "deleted", level: "info", message: "Project containers, volumes, credentials, and configuration were deleted" });
+  } catch (error) {
+    const message = boundedDiagnosticText(sanitizeText(error instanceof Error ? error.message : "Unknown deletion failure"));
+    repository.updateJobState(job.id, { status: "failed", errorCode: "DELETION_FAILED", errorMessage: message });
+    repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
+  }
+}
+
+export function scheduleDeletion(jobId: JobId): void {
+  if (activeJobs.has(jobId)) return;
+  const promise = Promise.resolve()
+    .then(() => runDeletionJob(jobId))
     .finally(() => activeJobs.delete(jobId));
   activeJobs.set(jobId, promise);
 }

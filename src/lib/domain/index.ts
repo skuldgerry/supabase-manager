@@ -86,6 +86,9 @@ export type ProjectStatus =
   | "failed"
   | "deleting";
 
+/** Whether the manager is allowed to mutate Docker resources for a project. */
+export type ProjectOwnership = "manager-owned" | "external";
+
 export type ProjectEndpoint =
   | "api"
   | "db-session"
@@ -105,6 +108,7 @@ export interface Project {
   readonly name: string;
   readonly slug: string;
   readonly status: ProjectStatus;
+  readonly ownership: ProjectOwnership;
   readonly stackRelease: string;
   readonly publicUrl: string;
   readonly siteUrl: string;
@@ -182,7 +186,12 @@ export type DeploymentStage =
   | "starting-database"
   | "starting-services"
   | "functional-checks"
-  | "ready";
+  | "ready"
+  | "stopping-services"
+  | "removing-containers"
+  | "removing-volumes"
+  | "removing-configuration"
+  | "deleted";
 
 export interface DurableJob {
   readonly id: JobId;
