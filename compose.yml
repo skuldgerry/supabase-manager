@@ -1,6 +1,6 @@
 services:
   broker:
-    image: skuldgerry/supabase-manager:1.0.0-broker
+    image: skuldgerry/supabase-manager:latest-broker
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -8,12 +8,10 @@ services:
       MANAGER_PORT: 3001
       MANAGER_BIND_ADDRESS: 0.0.0.0
       MANAGER_PUBLIC_URL: http://manager:3000
-      MANAGER_PROJECT_HOST: host.docker.internal
+      MANAGER_PROJECT_HOST: 192.168.1.10
       MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
       DOCKER_SOCKET_PATH: /var/run/docker.sock
       SESSION_TTL_HOURS: 24
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - broker-data:/data
       - manager-shared:/run/supabase-manager
@@ -31,7 +29,7 @@ services:
       start_period: 15s
 
   manager:
-    image: skuldgerry/supabase-manager:1.0.0
+    image: skuldgerry/supabase-manager:latest
     restart: unless-stopped
     depends_on:
       broker:
@@ -66,3 +64,4 @@ volumes:
   broker-data:
   studio-data:
   manager-shared:
+
