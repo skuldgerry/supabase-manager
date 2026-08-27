@@ -1,13 +1,12 @@
 # Supabase Manager
 
-> UI migration work is maintained in `studio-ui/`, which vendors the exact
-> Studio/Multi-Head frontend baseline. See [the UI migration notes](./docs/ui-migration.md).
-
 Supabase Manager is a local-first control plane for running multiple isolated
 projects from Supabase's official self-hosted Docker stack. It provides one
 login, organizations, project switching, per-project ports and initial secrets,
 named volumes, durable provisioning progress, and retrievable encrypted
 credentials.
+
+![Supabase Manager organizations](https://raw.githubusercontent.com/skuldgerry/supabase-manager/main/docs/images/supabase-manager-organizations.svg)
 
 The V1 deployment has two control-plane containers. `manager` serves the
 Studio-based UI and never receives the Docker socket. `broker` owns lifecycle
@@ -54,16 +53,81 @@ that Cloud backup or PITR services are available.
 
 ## Run
 
-Use the published release-candidate images with [compose.yml](./compose.yml).
-The broker requires a Linux Docker Engine and access to its Docker socket.
-The Studio manager does not mount the socket.
+The broker requires a Linux Docker Engine and access to its Docker socket. The
+Studio manager does not mount the socket. Save the following as `compose.yml`:
 
-The V1 release candidate uses:
+```yaml
+services:
+  broker:
+    image: skuldgerry/supabase-manager:1.0.0-broker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      MANAGER_DATA_DIR: /data
+      MANAGER_PORT: 3001
+      MANAGER_BIND_ADDRESS: 0.0.0.0
+      MANAGER_PUBLIC_URL: http://manager:3000
+      MANAGER_PROJECT_HOST: host.docker.internal
+      MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
+      SESSION_TTL_HOURS: 24
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - broker-data:/data
+      - manager-shared:/run/supabase-manager
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:3001/api/health')
+          .then((response) => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
-- `skuldgerry/supabase-manager:1.0.0-rc.2` for the Studio manager;
-- `skuldgerry/supabase-manager:1.0.0-rc.2-broker` for the broker.
+  manager:
+    image: skuldgerry/supabase-manager:1.0.0
+    restart: unless-stopped
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      STUDIO_DATA_DIR: /data
+      MANAGER_BROKER_URL: http://broker:3001
+      MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
+      NEXT_PUBLIC_STUDIO_AUTH: manager
+      DEFAULT_ORGANIZATION_NAME: Default Organization
+    ports:
+      - "3000:3000"
+    volumes:
+      - studio-data:/data
+      - manager-shared:/run/supabase-manager:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:3000/api/self-hosted/session')
+          .then((response) => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
-Prerelease tags do not move `latest`.
+volumes:
+  broker-data:
+  studio-data:
+  manager-shared:
+```
+
+The same file is available as [compose.yml](./compose.yml). Start the manager:
 
 ```sh
 docker compose pull
