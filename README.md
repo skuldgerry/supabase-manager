@@ -6,7 +6,7 @@ login, organizations, project switching, per-project ports and initial secrets,
 named volumes, durable provisioning progress, and retrievable encrypted
 credentials.
 
-![Supabase Manager organizations](https://raw.githubusercontent.com/skuldgerry/supabase-manager/main/docs/images/supabase-manager-organizations.svg)
+![Supabase Manager project switcher and project status](https://raw.githubusercontent.com/skuldgerry/supabase-manager/main/docs/images/parcel-proof-project-switcher.svg)
 
 The V1 deployment has two control-plane containers. `manager` serves the
 Studio-based UI and never receives the Docker socket. `broker` owns lifecycle
@@ -54,12 +54,13 @@ that Cloud backup or PITR services are available.
 ## Run
 
 The broker requires a Linux Docker Engine and access to its Docker socket. The
-Studio manager does not mount the socket. Save the following as `compose.yml`:
+Studio manager does not mount the socket. Replace `192.168.1.10` with the LAN
+IP address of the Docker host, then save the following as `compose.yml`:
 
 ```yaml
 services:
   broker:
-    image: skuldgerry/supabase-manager:1.0.0-broker
+    image: skuldgerry/supabase-manager:latest-broker
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -67,12 +68,10 @@ services:
       MANAGER_PORT: 3001
       MANAGER_BIND_ADDRESS: 0.0.0.0
       MANAGER_PUBLIC_URL: http://manager:3000
-      MANAGER_PROJECT_HOST: host.docker.internal
+      MANAGER_PROJECT_HOST: 192.168.1.10
       MANAGER_INTERNAL_TOKEN_FILE: /run/supabase-manager/internal-token
       DOCKER_SOCKET_PATH: /var/run/docker.sock
       SESSION_TTL_HOURS: 24
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - broker-data:/data
       - manager-shared:/run/supabase-manager
@@ -90,7 +89,7 @@ services:
       start_period: 15s
 
   manager:
-    image: skuldgerry/supabase-manager:1.0.0
+    image: skuldgerry/supabase-manager:latest
     restart: unless-stopped
     depends_on:
       broker:
@@ -153,3 +152,4 @@ Do not expose the manager UI directly to the public internet. Although only the
 broker mounts the Docker socket, authenticated manager administrators can issue
 privileged lifecycle requests and reveal project secrets. Protect the host and
 back up all three manager volumes.
+
