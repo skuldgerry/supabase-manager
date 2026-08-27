@@ -38,6 +38,18 @@ const DELETION_STAGES = [
   ['deleted', 'Project deleted'],
 ] as const
 
+const UPDATE_STAGES = [
+  ['validating', 'Validating release compatibility'],
+  ['preparing-release', 'Preparing official release'],
+  ['updating-configuration', 'Preparing release configuration'],
+  ['creating-backup', 'Backing up PostgreSQL'],
+  ['pulling-images', 'Pulling official images'],
+  ['starting-services', 'Recreating Supabase services'],
+  ['functional-checks', 'Running functional checks'],
+  ['rolling-back', 'Restoring previous release'],
+  ['ready', 'Update complete'],
+] as const
+
 export function BrokerDeploymentProgress({
   projectRef,
   projectName,
@@ -82,7 +94,11 @@ export function BrokerDeploymentProgress({
     }
   }, [organizationSlug, projectRef, router])
 
-  const stages = view?.job?.type === 'delete-project' ? DELETION_STAGES : CREATION_STAGES
+  const stages = view?.job?.type === 'delete-project'
+    ? DELETION_STAGES
+    : view?.job?.type === 'update-project'
+      ? UPDATE_STAGES
+      : CREATION_STAGES
   const currentIndex = Math.max(0, stages.findIndex(([id]) => id === view?.job?.stage))
   const failed = view?.job?.status === 'failed'
   const percent = failed ? Math.max(8, Math.round((currentIndex / stages.length) * 100)) : Math.round(((currentIndex + 1) / stages.length) * 100)
@@ -95,7 +111,13 @@ export function BrokerDeploymentProgress({
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-mono uppercase tracking-wider text-brand">Project lifecycle</p>
-              <h1 className="mt-2 text-2xl">{view?.job?.type === 'delete-project' ? `Deleting ${projectName}` : `Deploying ${projectName}`}</h1>
+              <h1 className="mt-2 text-2xl">
+                {view?.job?.type === 'delete-project'
+                  ? `Deleting ${projectName}`
+                  : view?.job?.type === 'update-project'
+                    ? `Updating ${projectName}`
+                    : `Deploying ${projectName}`}
+              </h1>
               <p className="mt-1 text-sm text-foreground-light">This job runs in the broker and survives page reloads and manager restarts.</p>
             </div>
             <div className={cn('flex items-center gap-2 text-sm', failed ? 'text-destructive' : 'text-warning')}>

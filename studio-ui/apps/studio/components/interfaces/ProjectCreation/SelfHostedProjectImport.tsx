@@ -153,8 +153,8 @@ export function SelfHostedProjectImport() {
             Import verifies the published API port and credentials against the local Docker Compose deployment. The broker will not recreate, modify, pause, or delete its containers and volumes.
           </div>
           {input('name', 'Project name')}
-          {input('publicUrl', 'Public project URL', { description: 'The URL used by applications and Auth redirects, including scheme and port when needed.' })}
-          {input('siteUrl', 'Auth site URL', { required: false, description: 'Defaults to the public project URL.' })}
+          {input('publicUrl', 'Public project URL', { description: 'The externally reachable API gateway root, for example http://10.16.15.5:8000. Do not append /auth/v1.' })}
+          {input('siteUrl', 'Auth site URL', { required: false, description: 'Your application frontend origin for Auth redirects and email links—not the Auth service URL. Defaults to the project URL when no frontend exists yet.' })}
           {input('localApiPort', 'Local API / Envoy port', { type: 'number', description: 'The published API gateway port on this Docker host.' })}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {input('dbHost', 'Database host')}
@@ -172,13 +172,13 @@ export function SelfHostedProjectImport() {
           <div className="border-t pt-4">
             <p className="mb-3 text-sm font-medium">Existing stack credentials</p>
             <div className="space-y-3">
-              {input('postgresPassword', 'Postgres password', { type: 'password' })}
-              {input('dashboardPassword', 'Studio password', { type: 'password' })}
-              {input('jwtSecret', 'JWT secret', { type: 'password' })}
-              {input('anonKey', 'ANON key', { type: 'password' })}
-              {input('serviceRoleKey', 'SERVICE_ROLE key', { type: 'password' })}
-              {input('publishableKey', 'Publishable key', { type: 'password', required: false })}
-              {input('secretKey', 'Secret key', { type: 'password', required: false })}
+              {input('postgresPassword', 'Postgres password', { type: 'password', description: 'POSTGRES_PASSWORD from the existing stack .env.' })}
+              {input('dashboardPassword', 'Studio password', { type: 'password', description: 'DASHBOARD_PASSWORD from the existing stack .env.' })}
+              {input('jwtSecret', 'JWT secret', { type: 'password', description: 'JWT_SECRET used to sign the legacy anon and service_role JWTs.' })}
+              {input('anonKey', 'ANON key', { type: 'password', description: 'ANON_KEY, the legacy client-safe JWT key.' })}
+              {input('serviceRoleKey', 'SERVICE_ROLE key', { type: 'password', description: 'SERVICE_ROLE_KEY. This bypasses RLS and must remain server-side.' })}
+              {input('publishableKey', 'Publishable key', { type: 'password', required: false, description: 'SUPABASE_PUBLISHABLE_KEY from newer official stacks. Falls back to ANON_KEY when omitted.' })}
+              {input('secretKey', 'Secret key', { type: 'password', required: false, description: 'SUPABASE_SECRET_KEY from newer official stacks. Falls back to SERVICE_ROLE_KEY when omitted.' })}
             </div>
           </div>
         </Panel.Content>

@@ -39,7 +39,7 @@ function makeDefaultOrg(): StoredOrganization {
     organization_missing_address: false,
     organization_missing_tax_id: false,
     organization_requires_mfa: false,
-    plan: { id: 'enterprise', name: 'Enterprise' },
+    plan: { id: 'enterprise', name: 'Self-hosted' },
     restriction_data: null,
     restriction_status: null,
     stripe_customer_id: null,
@@ -68,7 +68,13 @@ export function getStoredOrganizations(): StoredOrganization[] {
   const persistedDefault = persisted.find((o) => o.slug === 'default-org-slug')
   const defaultOrg = persistedDefault ?? makeDefaultOrg()
   const others = persisted.filter((o) => o.slug !== 'default-org-slug')
-  return [defaultOrg, ...others]
+  // Billing tiers are a Supabase Cloud concept. Manager organizations all
+  // receive the complete self-hosted UI capability set and share one neutral
+  // label, including records persisted by older versions as Free/Enterprise.
+  return [defaultOrg, ...others].map((organization) => ({
+    ...organization,
+    plan: { id: 'enterprise', name: 'Self-hosted' },
+  }))
 }
 
 export function getStoredOrganizationBySlug(slug: string): StoredOrganization | undefined {
@@ -132,7 +138,7 @@ export function createStoredOrganization(data: CreateOrganizationData): StoredOr
     organization_missing_address: false,
     organization_missing_tax_id: false,
     organization_requires_mfa: false,
-    plan: { id: 'free', name: 'Free' },
+    plan: { id: 'enterprise', name: 'Self-hosted' },
     restriction_data: null,
     restriction_status: null,
     stripe_customer_id: null,

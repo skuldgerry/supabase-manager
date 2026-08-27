@@ -53,8 +53,9 @@ describe('useGenerateSettingsMenu (self-hosted)', () => {
     const { result } = renderHook(() => useGenerateSettingsMenu())
     const configGroup = result.current.find((group) => group.title === 'Configuration')
 
-    expect(configGroup?.items.some((item) => item.key === 'general')).toBe(false)
-    expect(configGroup?.items.some((item) => item.key === 'api-keys')).toBe(false)
+    expect(configGroup?.items.some((item) => item.key === 'general')).toBe(true)
+    expect(configGroup?.items.some((item) => item.key === 'api-keys')).toBe(true)
+    expect(configGroup?.items.some((item) => item.key === 'credentials')).toBe(true)
     expect(configGroup?.items.some((item) => item.key === 'infrastructure')).toBe(false)
   })
 })

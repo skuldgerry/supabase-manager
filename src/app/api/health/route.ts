@@ -1,5 +1,5 @@
 import { getRepository } from "@/lib/db/manager";
-import { scheduleDeletion, scheduleProvisioning } from "@/lib/orchestrator/broker";
+import { scheduleDeletion, scheduleProvisioning, scheduleUpdate } from "@/lib/orchestrator/broker";
 import { scheduleLifecycle } from "@/lib/orchestrator/lifecycle";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +9,7 @@ export async function GET(): Promise<Response> {
     const repository = getRepository();
     for (const job of repository.listRunnableJobs()) {
       if (job.type === "create-project") scheduleProvisioning(job.id);
+      if (job.type === "update-project") scheduleUpdate(job.id);
       if (job.type === "delete-project") scheduleDeletion(job.id);
       if (["start-project", "stop-project", "restart-project"].includes(job.type)) scheduleLifecycle(job.id);
     }

@@ -29,6 +29,7 @@ async function sync(project: StoredProject): Promise<void> {
     kong_http_port: view.project.ports.api,
     pooler_port: view.project.ports.dbTransaction,
     docker_project: view.project.dockerProject,
+    stack_release: view.project.stackRelease,
   })
 }
 

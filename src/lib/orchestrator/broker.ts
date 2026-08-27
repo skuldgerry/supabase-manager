@@ -35,6 +35,11 @@ const REQUIRED_ENV_KEYS = [
   "DASHBOARD_PASSWORD",
 ] as const;
 
+const OPTIONAL_CREDENTIAL_ENV_KEYS = [
+  "S3_PROTOCOL_ACCESS_KEY_ID",
+  "S3_PROTOCOL_ACCESS_KEY_SECRET",
+] as const;
+
 function exists(filePath: string): Promise<boolean> {
   return access(filePath).then(() => true, () => false);
 }
@@ -78,6 +83,12 @@ export function versionAtLeast(actual: string, minimum: string): boolean {
     if ((left[index] ?? 0) < (right[index] ?? 0)) return false;
   }
   return true;
+}
+
+export function officialUpdatePreviewBlocker(output: string): "manual-migration" | "merge-conflict" | null {
+  if (/\bBREAKING\b|\bgate:/i.test(output)) return "manual-migration";
+  if (/CONFLICTS:\s*[1-9]\d*|merge failures:\s*[1-9]\d*/i.test(output)) return "merge-conflict";
+  return null;
 }
 
 function parseEnv(contents: string): Map<string, string> {
@@ -145,7 +156,19 @@ async function prepareOfficialRelease(runner: CommandRunner, release: string, re
 
 async function validateOfficialReleaseLayout(dockerDir: string, adapter: ReturnType<typeof adapterForRelease>): Promise<void> {
   const composeContents = await readFile(path.join(dockerDir, "docker-compose.yml"), "utf8");
-  const missingServices = adapter.services.filter((service) => !new RegExp(`^  ${service}:\\s*$`, "m").test(composeContents));
+  const declaredServices: string[] = [];
+  let inServices = false;
+  for (const line of composeContents.split(/\r?\n/)) {
+    if (line.trim() === "services:" && !line.startsWith(" ")) {
+      inServices = true;
+      continue;
+    }
+    if (inServices && line && !line.startsWith(" ") && !line.startsWith("#")) break;
+    const service = inServices ? line.match(/^  ([a-zA-Z0-9_-]+):\s*$/)?.[1] : undefined;
+    if (service) declaredServices.push(service);
+  }
+  const missingServices = adapter.services.filter((service) => !declaredServices.includes(service));
+  const unexpectedServices = declaredServices.filter((service) => !adapter.services.includes(service));
   const requiredPaths = [
     ".env.example",
     "utils/generate-keys.sh",
@@ -161,13 +184,25 @@ async function validateOfficialReleaseLayout(dockerDir: string, adapter: ReturnT
   ];
   const missingPaths = (await Promise.all(requiredPaths.map(async (relativePath) =>
     await exists(path.join(dockerDir, relativePath)) ? null : relativePath))).filter(Boolean);
-  if (missingServices.length > 0 || missingPaths.length > 0) {
+  if (missingServices.length > 0 || unexpectedServices.length > 0 || missingPaths.length > 0) {
     const details = [
       missingServices.length ? `services: ${missingServices.join(", ")}` : "",
+      unexpectedServices.length ? `unmanaged services: ${unexpectedServices.join(", ")}` : "",
       missingPaths.length ? `files: ${missingPaths.join(", ")}` : "",
     ].filter(Boolean).join("; ");
     throw new Error(`Official release ${adapter.release} is not compatible with its manager adapter (${details})`);
   }
+}
+
+function assertNoBindMounts(renderedCompose: string): void {
+  const parsed = JSON.parse(renderedCompose) as {
+    services?: Record<string, { volumes?: Array<{ type?: string; source?: string; target?: string }> }>;
+  };
+  const binds = Object.entries(parsed.services ?? {}).flatMap(([service, definition]) =>
+    (definition.volumes ?? []).flatMap((volume) => volume.type === "bind"
+      ? [`${service}:${volume.source ?? "bind"}->${volume.target ?? "unknown"}`]
+      : []));
+  if (binds.length > 0) throw new Error(`official release contains bind mounts not covered by the manager adapter (${binds.join(", ")})`);
 }
 
 async function loadEncryptedCredential<T>(projectId: DomainProjectId, name: string): Promise<T | undefined> {
@@ -365,6 +400,10 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
       if (!value) throw new Error(`official credential generator did not populate ${key}`);
       credentialBundle[key] = value;
     }
+    for (const key of OPTIONAL_CREDENTIAL_ENV_KEYS) {
+      const value = env.get(key);
+      if (value) credentialBundle[key] = value;
+    }
     secrets = Object.values(credentialBundle);
     if (!credentialsReady) {
       const masterKey = await getMasterKey();
@@ -398,7 +437,8 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     }), { mode: 0o600 });
 
     const compose = { files: [helperUpdatedCompose, overridePath], envFile: envPath, projectName: dockerProjectName(orchestrationProjectId) } as const;
-    await driver.compose({ ...compose, args: ["config", "--quiet"] });
+    const renderedCompose = await driver.compose({ ...compose, args: ["config", "--format", "json"] });
+    assertNoBindMounts(renderedCompose.stdout);
 
     stage("initializing-configuration", "Initializing image-provided database files, then overlaying the official release configuration into named volumes");
     // Creating the stopped official db container first lets Docker copy the
@@ -466,6 +506,342 @@ export function scheduleProvisioning(jobId: JobId): void {
   if (activeJobs.has(jobId)) return;
   const promise = Promise.resolve()
     .then(() => runProvisioningJob(jobId))
+    .finally(() => activeJobs.delete(jobId));
+  activeJobs.set(jobId, promise);
+}
+
+function postgresMajor(composeContents: string): number | null {
+  const match = composeContents.match(/image:\s*supabase\/postgres:(\d+)(?:\.|-)/);
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function credentialsFromEnvironment(environment: string): ProjectCredentials {
+  const env = parseEnv(environment);
+  const credentials: ProjectCredentials = {};
+  for (const key of REQUIRED_ENV_KEYS) {
+    const value = env.get(key);
+    if (!value) throw new Error(`updated official environment does not contain ${key}`);
+    credentials[key] = value;
+  }
+  for (const key of OPTIONAL_CREDENTIAL_ENV_KEYS) {
+    const value = env.get(key);
+    if (value) credentials[key] = value;
+  }
+  return credentials;
+}
+
+async function saveProjectEnvironmentAndCredentials(
+  projectId: DomainProjectId,
+  environment: string,
+): Promise<void> {
+  const credentials = credentialsFromEnvironment(environment);
+  const masterKey = await getMasterKey();
+  const repository = getRepository();
+  repository.upsertCredential({
+    projectId,
+    kind: "other",
+    name: "project-credentials",
+    ...encryptedEnvelopeFor(credentials, `${projectId}:project-credentials`, masterKey),
+  });
+  repository.upsertCredential({
+    projectId,
+    kind: "other",
+    name: "project-environment",
+    ...encryptedEnvelopeFor(environment, `${projectId}:project-environment`, masterKey),
+  });
+}
+
+async function functionalCheckProject(
+  runner: CommandRunner,
+  projectId: DomainProjectId,
+  apiPort: number,
+  credentials: ProjectCredentials,
+): Promise<void> {
+  const dbContainer = projectContainerName(asProjectId(projectId), "db");
+  const databaseCheck = await runner.run({
+    executable: "docker",
+    args: [
+      "exec", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-tAc",
+      "SELECT (to_regrole('anon') IS NOT NULL AND to_regrole('authenticated') IS NOT NULL AND to_regrole('service_role') IS NOT NULL AND to_regnamespace('auth') IS NOT NULL AND to_regnamespace('storage') IS NOT NULL AND to_regnamespace('_realtime') IS NOT NULL);",
+    ],
+    timeoutMs: 30_000,
+  });
+  if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") {
+    throw new Error("required Supabase database roles or schemas are missing after the update");
+  }
+  const projectApi = `http://${getConfig().projectHost}:${apiPort}`;
+  const anonHeaders = { apikey: credentials.ANON_KEY, Authorization: `Bearer ${credentials.ANON_KEY}` };
+  const serviceHeaders = { apikey: credentials.SERVICE_ROLE_KEY, Authorization: `Bearer ${credentials.SERVICE_ROLE_KEY}` };
+  await checkHttpEndpoint(`${projectApi}/auth/v1/health`, anonHeaders);
+  await checkHttpEndpoint(`${projectApi}/rest/v1/`, serviceHeaders);
+  await checkHttpEndpoint(`${projectApi}/storage/v1/status`);
+}
+
+/**
+ * Switch a manager-owned project to another pinned official self-hosted release.
+ * Persistent data volumes and credentials are retained. Release-scoped config
+ * volumes are rebuilt from the target tag. A failed switch is rolled back to
+ * the prior Compose configuration before the job is marked failed.
+ */
+export async function runUpdateJob(jobId: JobId): Promise<void> {
+  const repository = getRepository();
+  const job = repository.getJob(jobId);
+  if (!job?.projectId || job.type !== "update-project") return;
+  if (job.status === "succeeded" || job.status === "cancelled") return;
+  const project = repository.getProject(job.projectId);
+  if (!project) return;
+  const targetRelease = repository.listJobEvents(job.id)
+    .map((event) => event.details.targetRelease)
+    .find((value): value is string => typeof value === "string");
+  if (!targetRelease) throw new Error("update job target release is unavailable");
+
+  const runner = new DirectCommandRunner();
+  const driver = new DockerCliHostDriver(runner);
+  const config = getConfig();
+  const projectId = asProjectId(project.id);
+  const projectDir = path.join(config.dataDir, "projects", project.id);
+  const currentComposePath = path.join(projectDir, "docker-compose.yml");
+  const currentOverridePath = path.join(projectDir, "manager.override.yml");
+  const vendorDir = path.join(projectDir, "vendor");
+  const previousVendorDir = path.join(projectDir, "vendor.previous");
+  const updateDir = path.join(projectDir, `update-${job.id}`);
+  const rollbackDir = path.join(projectDir, `rollback-${job.id}`);
+  const candidateComposePath = path.join(updateDir, "docker-compose.yml");
+  const candidateOverridePath = path.join(updateDir, "manager.override.yml");
+  const candidateEnvPath = path.join(updateDir, ".env");
+  const rollbackComposePath = path.join(rollbackDir, "docker-compose.yml");
+  const rollbackOverridePath = path.join(rollbackDir, "manager.override.yml");
+  const rollbackEnvPath = path.join(rollbackDir, ".env");
+  let secrets: string[] = [];
+  let attemptedSwitch = false;
+  let previousEnvironment: string | undefined;
+
+  const stage = (next: DeploymentStage, message: string) => {
+    repository.updateJobState(job.id, { status: "running", stage: next });
+    repository.appendJobEvent({ jobId: job.id, stage: next, level: "info", message });
+  };
+
+  try {
+    if (project.ownership !== "manager-owned") throw new Error("externally managed projects cannot be updated by the broker");
+    if (project.status !== "ready") throw new Error("the project must be ready before it can be updated");
+    if (targetRelease === project.stackRelease) throw new Error("the project already uses the selected release");
+    const adapter = adapterForRelease(targetRelease);
+    stage("validating", `Validated update from ${project.stackRelease} to ${targetRelease}`);
+
+    if (!(await exists(currentComposePath)) || !(await exists(currentOverridePath))) {
+      throw new Error("manager-owned Compose configuration is unavailable");
+    }
+    previousEnvironment = await loadEncryptedCredential<string>(project.id, "project-environment");
+    if (!previousEnvironment) throw new Error("encrypted project environment is unavailable");
+    const currentCredentials = await loadEncryptedCredential<ProjectCredentials>(project.id, "project-credentials");
+    if (!currentCredentials) throw new Error("encrypted project credentials are unavailable");
+    secrets = Object.values(currentCredentials);
+
+    stage("preparing-release", `Preparing official Supabase update from ${project.stackRelease} to ${targetRelease}`);
+    const [baseUpstream, targetUpstream] = await Promise.all([
+      prepareOfficialRelease(runner, project.stackRelease, config.releaseCacheDir),
+      prepareOfficialRelease(runner, targetRelease, config.releaseCacheDir),
+    ]);
+    await validateOfficialReleaseLayout(targetUpstream, adapter);
+    await rm(updateDir, { recursive: true, force: true });
+    await rm(rollbackDir, { recursive: true, force: true });
+    // Discard only the older fallback snapshot before any runtime mutation.
+    // If this fails, the update stops while the active project is untouched.
+    await rm(previousVendorDir, { recursive: true, force: true });
+    await mkdir(rollbackDir, { recursive: true, mode: 0o700 });
+    await copyFile(currentComposePath, rollbackComposePath);
+    await copyFile(currentOverridePath, rollbackOverridePath);
+    await writeFile(rollbackEnvPath, previousEnvironment, { mode: 0o600 });
+    if (await exists(path.join(vendorDir, ".supabase-version"))) {
+      await cp(vendorDir, updateDir, { recursive: true, force: true });
+    } else {
+      await cp(baseUpstream, updateDir, { recursive: true, force: true });
+    }
+    await copyFile(currentComposePath, candidateComposePath);
+    await copyFile(path.join(targetUpstream, "update.sh"), path.join(updateDir, "update.sh"));
+    await writeFile(path.join(updateDir, ".supabase-version"), `ref=${project.stackRelease}\n`, { mode: 0o600 });
+
+    await writeFile(candidateEnvPath, previousEnvironment, { mode: 0o600 });
+
+    const dryRun = await runner.run({
+      executable: "sh",
+      args: ["update.sh", "--dry-run", "--from", project.stackRelease, "--to", targetRelease],
+      cwd: updateDir,
+      timeoutMs: 15 * 60_000,
+    });
+    const dryRunOutput = boundedDiagnosticText(sanitizeText(`${dryRun.stdout}\n${dryRun.stderr}`, secrets));
+    if (dryRun.exitCode !== 0) throw new Error(`official update preview failed (${dryRun.exitCode}): ${dryRunOutput}`);
+    repository.appendJobEvent({
+      jobId: job.id,
+      stage: "preparing-release",
+      level: "info",
+      message: dryRunOutput || "Official update preview completed without conflicts",
+    });
+    const previewBlocker = officialUpdatePreviewBlocker(dryRunOutput);
+    if (previewBlocker === "manual-migration") {
+      throw new Error("The official update manifest requires a manual migration step. Review the preview log; the project was not changed.");
+    }
+    if (previewBlocker === "merge-conflict") {
+      throw new Error("The official update preview found configuration merge conflicts. Review the preview log; the project was not changed.");
+    }
+
+    const officialUpdate = await runner.run({
+      executable: "sh",
+      args: ["update.sh", "--yes", "--from", project.stackRelease, "--to", targetRelease],
+      cwd: updateDir,
+      timeoutMs: 15 * 60_000,
+    });
+    const updateOutput = boundedDiagnosticText(sanitizeText(`${officialUpdate.stdout}\n${officialUpdate.stderr}`, secrets));
+    if (officialUpdate.exitCode !== 0) {
+      throw new Error(`official update script failed (${officialUpdate.exitCode}): ${updateOutput}`);
+    }
+    repository.appendJobEvent({
+      jobId: job.id,
+      stage: "preparing-release",
+      level: "info",
+      message: updateOutput || "Official update script completed",
+    });
+    await validateOfficialReleaseLayout(updateDir, adapter);
+
+    const [currentCompose, candidateCompose] = await Promise.all([
+      readFile(currentComposePath, "utf8"),
+      readFile(candidateComposePath, "utf8"),
+    ]);
+    const currentPg = postgresMajor(currentCompose);
+    const targetPg = postgresMajor(candidateCompose);
+    if (!currentPg || !targetPg) throw new Error("the PostgreSQL image major could not be determined from the official Compose files");
+    if (currentPg !== targetPg) {
+      throw new Error(`PostgreSQL major upgrade ${currentPg} to ${targetPg} requires a dedicated database migration and was not started`);
+    }
+
+    const mergedEnvironment = patchEnv(
+      await readFile(candidateEnvPath, "utf8"),
+      projectPublicEnvironment(project),
+    );
+    await writeFile(candidateEnvPath, mergedEnvironment, { mode: 0o600 });
+
+    stage("updating-configuration", "Creating release-scoped named volumes from the pinned official release");
+    const volumes = await ensureProjectVolumes(driver, {
+      projectId,
+      organizationId: project.organizationId,
+      release: targetRelease,
+    });
+    for (const volume of volumes) repository.recordVolume({
+      projectId: project.id,
+      dockerName: volume.name,
+      kind: volume.purpose === "deno_cache" ? "cache" : volume.persistent ? "persistent" : "configuration",
+      purpose: volume.purpose,
+      stackRelease: targetRelease,
+    });
+    await seedConfigurationVolumes(runner, volumes.filter((volume) => volume.releaseScoped), updateDir, updateDir, adapter);
+    await writeFile(candidateOverridePath, generateComposeOverride({
+      projectId,
+      release: targetRelease,
+      ports: project.ports,
+      volumes,
+      mounts: adapter.mounts,
+      services: adapter.services,
+      gatewayService: adapter.gatewayService,
+      realtimeService: adapter.realtimeService,
+      gatewayEntrypoint: adapter.gatewayEntrypoint,
+    }), { mode: 0o600 });
+    const candidate = {
+      files: [candidateComposePath, candidateOverridePath],
+      envFile: candidateEnvPath,
+      projectName: dockerProjectName(projectId),
+    } as const;
+    const renderedCandidate = await driver.compose({ ...candidate, args: ["config", "--format", "json"] });
+    assertNoBindMounts(renderedCandidate.stdout);
+
+    stage("creating-backup", "Creating a pre-update PostgreSQL logical backup");
+    const backupDir = path.join(projectDir, "backups");
+    await mkdir(backupDir, { recursive: true, mode: 0o700 });
+    const backupName = `pre-update-${new Date().toISOString().replace(/[:.]/g, "-")}.sql`;
+    const containerBackup = `/tmp/${backupName}`;
+    const dbContainer = projectContainerName(projectId, "db");
+    await runChecked(runner, "docker", ["exec", dbContainer, "pg_dumpall", "-U", "postgres", "--file", containerBackup], { timeoutMs: 30 * 60_000 });
+    await runChecked(runner, "docker", ["cp", `${dbContainer}:${containerBackup}`, path.join(backupDir, backupName)], { timeoutMs: 30 * 60_000 });
+    await runner.run({ executable: "docker", args: ["exec", dbContainer, "rm", "-f", containerBackup], timeoutMs: 60_000 });
+
+    stage("pulling-images", "Pulling image versions pinned by the target official release");
+    await driver.compose({ ...candidate, args: ["pull"] });
+    stage("starting-services", "Recreating project services with the target official release");
+    attemptedSwitch = true;
+    await driver.compose({ ...candidate, args: ["up", "--detach", "--remove-orphans"] });
+    await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
+      ? `realtime-dev.${dockerProjectName(projectId)}_realtime`
+      : projectContainerName(projectId, service)));
+
+    stage("functional-checks", "Checking database roles, schemas, Auth, REST, and Storage after the update");
+    const updatedCredentials = credentialsFromEnvironment(mergedEnvironment);
+    await functionalCheckProject(runner, project.id, project.ports.api, updatedCredentials);
+
+    await copyFile(candidateComposePath, currentComposePath);
+    await copyFile(candidateOverridePath, currentOverridePath);
+    await saveProjectEnvironmentAndCredentials(project.id, mergedEnvironment);
+    await rm(path.join(updateDir, ".env"), { force: true });
+    await rm(path.join(updateDir, ".env.rollback"), { force: true });
+    await rm(path.join(updateDir, "manager.override.yml"), { force: true });
+    await rm(path.join(updateDir, "seed"), { recursive: true, force: true });
+    // The official script backs up configuration including .env. Credentials
+    // remain encrypted at rest in Manager, so its temporary plaintext archive
+    // must not be persisted with the vendor snapshot.
+    await rm(path.join(updateDir, "backups"), { recursive: true, force: true });
+    if (await exists(vendorDir)) await rename(vendorDir, previousVendorDir);
+    await rename(updateDir, vendorDir);
+    repository.updateProjectRelease(project.id, targetRelease);
+    repository.updateProjectStatus(project.id, "ready");
+    repository.updateJobState(job.id, { status: "succeeded", stage: "ready" });
+    repository.appendJobEvent({
+      jobId: job.id,
+      stage: "ready",
+      level: "info",
+      message: `Project update to ${targetRelease} completed and passed functional checks`,
+    });
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : "Unknown project update failure";
+    let message = boundedDiagnosticText(sanitizeText(raw, secrets));
+    if (attemptedSwitch) {
+      try {
+        stage("rolling-back", `Update failed; restoring ${project.stackRelease}`);
+        const rollbackAdapter = adapterForRelease(project.stackRelease);
+        const rollback = {
+          files: [rollbackComposePath, rollbackOverridePath],
+          envFile: rollbackEnvPath,
+          projectName: dockerProjectName(projectId),
+        } as const;
+        await driver.compose({ ...rollback, args: ["up", "--detach", "--remove-orphans"] });
+        await waitForContainers(runner, rollbackAdapter.services.map((service) => service === rollbackAdapter.realtimeService
+          ? `realtime-dev.${dockerProjectName(projectId)}_realtime`
+          : projectContainerName(projectId, service)));
+        await copyFile(rollbackComposePath, currentComposePath);
+        await copyFile(rollbackOverridePath, currentOverridePath);
+        if (previousEnvironment) await saveProjectEnvironmentAndCredentials(project.id, previousEnvironment);
+        repository.updateProjectRelease(project.id, project.stackRelease);
+        if (await exists(previousVendorDir)) {
+          await rm(vendorDir, { recursive: true, force: true });
+          await rename(previousVendorDir, vendorDir);
+        }
+        repository.updateProjectStatus(project.id, "ready");
+        message = `${message} The previous release was restored successfully.`;
+      } catch (rollbackError) {
+        repository.updateProjectStatus(project.id, "failed");
+        message = `${message} Automatic rollback also failed: ${boundedDiagnosticText(sanitizeText(rollbackError instanceof Error ? rollbackError.message : "unknown rollback failure", secrets))}`;
+      }
+    }
+    repository.updateJobState(job.id, { status: "failed", errorCode: "UPDATE_FAILED", errorMessage: message });
+    repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
+  } finally {
+    await rm(candidateEnvPath, { force: true }).catch(() => undefined);
+    await rm(path.join(updateDir, "backups"), { recursive: true, force: true }).catch(() => undefined);
+    await rm(rollbackDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export function scheduleUpdate(jobId: JobId): void {
+  if (activeJobs.has(jobId)) return;
+  const promise = Promise.resolve()
+    .then(() => runUpdateJob(jobId))
     .finally(() => activeJobs.delete(jobId));
   activeJobs.set(jobId, promise);
 }

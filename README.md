@@ -60,8 +60,8 @@ The Studio manager does not mount the socket.
 
 The V1 release candidate uses:
 
-- `skuldgerry/supabase-manager:1.0.0-rc.1` for the Studio manager;
-- `skuldgerry/supabase-manager:1.0.0-rc.1-broker` for the broker.
+- `skuldgerry/supabase-manager:1.0.0-rc.2` for the Studio manager;
+- `skuldgerry/supabase-manager:1.0.0-rc.2-broker` for the broker.
 
 Prerelease tags do not move `latest`.
 

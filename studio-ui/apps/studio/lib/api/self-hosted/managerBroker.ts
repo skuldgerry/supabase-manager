@@ -47,6 +47,15 @@ export type ManagerBrokerCredentials = {
   secretKey: string
   anonKey: string
   serviceRoleKey: string
+  jwtSecret: string
+  dashboard: {
+    username: string
+    password: string
+  }
+  storage: {
+    accessKeyId: string | null
+    secretAccessKey: string | null
+  }
   database: {
     host: string
     username: string
@@ -269,6 +278,27 @@ export function updateManagerBrokerProjectLifecycle(
   return brokerRequest<ManagerBrokerProjectView>(
     `/api/internal/v1/projects/${encodeURIComponent(projectId)}/lifecycle`,
     { method: 'POST', body: JSON.stringify(input) }
+  )
+}
+
+export function updateManagerBrokerProjectRelease(
+  projectId: string,
+  input: { actorEmail: string; targetRelease: string }
+) {
+  return brokerRequest<ManagerBrokerProjectView>(
+    `/api/internal/v1/projects/${encodeURIComponent(projectId)}/update`,
+    { method: 'POST', body: JSON.stringify(input) }
+  )
+}
+
+export function getManagerBrokerProjectUpdateOptions(projectId: string, actorEmail: string) {
+  return brokerRequest<{
+    currentRelease: string
+    ownership: 'manager-owned' | 'external'
+    releases: string[]
+    latestRelease: string
+  }>(
+    `/api/internal/v1/projects/${encodeURIComponent(projectId)}/update?actorEmail=${encodeURIComponent(actorEmail)}`
   )
 }
 

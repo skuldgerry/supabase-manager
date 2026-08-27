@@ -1,6 +1,6 @@
 services:
   broker:
-    image: skuldgerry/supabase-manager:1.0.0-rc.1-broker
+    image: skuldgerry/supabase-manager:1.0.0-rc.2-broker
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -31,7 +31,7 @@ services:
       start_period: 15s
 
   manager:
-    image: skuldgerry/supabase-manager:1.0.0-rc.1
+    image: skuldgerry/supabase-manager:1.0.0-rc.2
     restart: unless-stopped
     depends_on:
       broker:

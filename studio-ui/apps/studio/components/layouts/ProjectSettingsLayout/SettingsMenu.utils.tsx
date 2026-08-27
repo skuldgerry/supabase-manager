@@ -35,6 +35,20 @@ export const useGenerateSettingsMenu = () => {
             items: [],
           },
           {
+            name: 'API Keys',
+            key: 'api-keys',
+            url: `/project/${ref}/settings/api-keys`,
+            items: [],
+            disabled: !isProjectActive,
+          },
+          {
+            name: 'Credentials',
+            key: 'credentials',
+            url: `/project/${ref}/settings/credentials`,
+            items: [],
+            disabled: !isProjectActive,
+          },
+          {
             name: `Log Drains`,
             key: `log-drains`,
             url: `/project/${ref}/settings/log-drains`,

@@ -42,6 +42,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     secretKey: credentials.SUPABASE_SECRET_KEY,
     anonKey: credentials.ANON_KEY,
     serviceRoleKey: credentials.SERVICE_ROLE_KEY,
+    jwtSecret: credentials.JWT_SECRET,
+    dashboard: {
+      username: credentials.DASHBOARD_USERNAME ?? project.dashboardUsername,
+      password: credentials.DASHBOARD_PASSWORD,
+    },
+    storage: {
+      accessKeyId: credentials.S3_PROTOCOL_ACCESS_KEY_ID ?? null,
+      secretAccessKey: credentials.S3_PROTOCOL_ACCESS_KEY_SECRET ?? null,
+    },
     database,
   }, { headers: { "Cache-Control": "no-store, private" } });
 }

@@ -504,6 +504,13 @@ export class ControlPlaneRepository {
     return this.getProject(projectId)!;
   }
 
+  public updateProjectRelease(projectId: ProjectId, stackRelease: string): Project {
+    const result = this.db.prepare("UPDATE projects SET stack_release = ?, updated_at = ? WHERE id = ?")
+      .run(required(stackRelease, "stackRelease"), now(), projectId);
+    if (result.changes !== 1) throw new Error("project not found");
+    return this.getProject(projectId)!;
+  }
+
   public activateProjectPorts(projectId: ProjectId): void {
     this.db.prepare("UPDATE port_reservations SET status = 'active', expires_at = NULL WHERE project_id = ? AND status = 'held'")
       .run(projectId);

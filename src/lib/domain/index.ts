@@ -168,6 +168,7 @@ export interface EncryptedCredential {
 
 export type JobType =
   | "create-project"
+  | "update-project"
   | "start-project"
   | "stop-project"
   | "restart-project"
@@ -183,6 +184,8 @@ export type DeploymentStage =
   | "creating-volumes"
   | "initializing-configuration"
   | "pulling-images"
+  | "creating-backup"
+  | "updating-configuration"
   | "starting-database"
   | "starting-services"
   | "functional-checks"
@@ -191,6 +194,7 @@ export type DeploymentStage =
   | "removing-containers"
   | "removing-volumes"
   | "removing-configuration"
+  | "rolling-back"
   | "deleted";
 
 export interface DurableJob {

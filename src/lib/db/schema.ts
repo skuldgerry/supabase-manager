@@ -1,6 +1,6 @@
 /** SQLite schema for the control plane. The application should execute this
  * statement once inside a transaction before serving requests. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const CONTROL_PLANE_SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -139,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_mfa_recovery_user ON mfa_recovery_codes(user_id, 
 
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('create-project', 'start-project', 'stop-project', 'restart-project', 'delete-project', 'check-project')),
+  type TEXT NOT NULL CHECK (type IN ('create-project', 'update-project', 'start-project', 'stop-project', 'restart-project', 'delete-project', 'check-project')),
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   requested_by TEXT NOT NULL REFERENCES users(id),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),

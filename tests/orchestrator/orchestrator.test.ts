@@ -15,7 +15,7 @@ import {
   sortOfficialReleases,
   volumePlan,
 } from "../../src/lib/orchestrator/index.js";
-import { legacyJwt, patchEnv, projectPublicEnvironment, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
+import { legacyJwt, officialUpdatePreviewBlocker, patchEnv, projectPublicEnvironment, versionAtLeast } from "../../src/lib/orchestrator/broker.js";
 import { validateExternalAdoption } from "../../src/lib/orchestrator/external-adoption.js";
 
 const projectId = asProjectId("11111111-1111-4111-8111-111111111111");
@@ -159,6 +159,12 @@ test("Compose version checks handle v-prefixed and major releases", () => {
   assert.equal(versionAtLeast("v2.24.4", "2.24.4"), true);
   assert.equal(versionAtLeast("2.23.9", "2.24.4"), false);
   assert.equal(versionAtLeast("5.0.1", "2.24.4"), true);
+});
+
+test("official update previews stop before gated migrations or merge conflicts", () => {
+  assert.equal(officialUpdatePreviewBlocker("[0.9.0] BREAKING\n    gate: migrate first"), "manual-migration");
+  assert.equal(officialUpdatePreviewBlocker("CONFLICTS:        2\nmerge failures:   0"), "merge-conflict");
+  assert.equal(officialUpdatePreviewBlocker("CONFLICTS:        0\nmerge failures:   0"), null);
 });
 
 test("external adoption validates compatibility and never probes the supplied host", () => {
