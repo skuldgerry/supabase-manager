@@ -331,3 +331,20 @@ export function managerOrigin(headers: IncomingHttpHeaders): string {
   const forwardedHost = String(headers['x-forwarded-host'] ?? headers.host ?? 'localhost').split(',')[0].trim()
   return `${forwardedProto}://${forwardedHost}`
 }
+
+export function testManagerBrokerFunction(projectId: string, input: {
+  actorEmail: string
+  url: string
+  method: string
+  headers: Record<string, string>
+  body?: string
+}): Promise<Response> {
+  const { baseUrl, token } = configuration()
+  return fetch(`${baseUrl}/api/internal/v1/projects/${encodeURIComponent(projectId)}/functions/test`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    redirect: 'manual',
+    cache: 'no-store',
+  })
+}

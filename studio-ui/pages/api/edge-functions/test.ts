@@ -1,7 +1,7 @@
 import { IS_PLATFORM } from 'common'
 import { NextApiRequest, NextApiResponse } from 'next'
 
-import { isValidEdgeFunctionURL } from '@/lib/api/edgeFunctions'
+import { edgeFunctionPath, edgeFunctionRequestHeaders, isValidEdgeFunctionURL } from '@/lib/api/edgeFunctions'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req
@@ -23,11 +23,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { url: requestUrl, method, body: requestBody, headers: customHeaders } = req.body
-    const url = IS_PLATFORM
-      ? requestUrl
-      : requestUrl.replace(process.env.SUPABASE_PUBLIC_URL, process.env.SUPABASE_URL)
-
-    const validEdgeFnUrl = isValidEdgeFunctionURL(url, IS_PLATFORM)
+    const publicOrigin = process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL
+    const path = !IS_PLATFORM && publicOrigin ? edgeFunctionPath(requestUrl, publicOrigin) : undefined
+    const internal = !IS_PLATFORM && process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL) : undefined
+    const validEdgeFnUrl = IS_PLATFORM
+      ? isValidEdgeFunctionURL(requestUrl, true)
+      : Boolean(internal && ['http:', 'https:'].includes(internal.protocol) && !internal.username && !internal.password && path)
 
     if (!validEdgeFnUrl) {
       return res.status(400).json({
@@ -36,34 +37,20 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       })
     }
 
-    // Remove any undefined or null values from custom headers
-    const sanitizedCustomHeaders = Object.entries(customHeaders || {}).reduce(
-      (acc, [key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-          acc[key] = value as string
-        }
-        return acc
-      },
-      {} as Record<string, string>
-    )
+    const requested = new URL(requestUrl)
+    const url = new URL(IS_PLATFORM ? 'https://supabase.co' : internal!.origin)
+    if (IS_PLATFORM) url.hostname = requested.hostname
+    // Property assignment preserves the trusted authority even for a // pathname.
+    url.pathname = requested.pathname
+    url.search = requested.search
 
-    // Only use custom headers and ensure Content-Type is set
-    const requestHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...sanitizedCustomHeaders,
-    }
-
-    // Use the test authorization header if provided
-    if (sanitizedCustomHeaders['x-test-authorization']) {
-      requestHeaders['Authorization'] = sanitizedCustomHeaders['x-test-authorization']
-      // Remove the x-test-authorization header as we've moved it to Authorization
-      delete requestHeaders['x-test-authorization']
-    }
+    const functionHeaders = edgeFunctionRequestHeaders(customHeaders)
+    const requestHeaders = Object.fromEntries(functionHeaders.entries())
 
     // Prepare the request body based on method and Content-Type
     let finalBody = undefined
     if (method !== 'GET' && method !== 'HEAD') {
-      if (requestHeaders['Content-Type'] === 'application/json') {
+      if (functionHeaders.get('content-type') === 'application/json') {
         finalBody = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody)
       } else {
         finalBody = requestBody
@@ -78,15 +65,12 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     })
 
     // Handle non-JSON responses
-    let responseBody: string
+    let responseBody = await response.text()
     const contentType = response.headers.get('content-type')
-    if (contentType?.includes('application/json')) {
+    if (responseBody && contentType?.includes('application/json')) {
       // If JSON, parse and stringify to ensure it's valid JSON
-      const jsonBody = await response.json()
+      const jsonBody = JSON.parse(responseBody)
       responseBody = JSON.stringify(jsonBody)
-    } else {
-      // For non-JSON responses, get raw text
-      responseBody = await response.text()
     }
 
     if (!response.ok) {

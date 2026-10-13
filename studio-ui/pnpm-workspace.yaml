@@ -15,7 +15,7 @@ catalog:
   '@types/react-dom': ^18.3.0
   lodash: ^4.18.1
   lodash-es: ^4.18.1
-  next: ~16.2.3
+  next: ~16.3.8
   react: ^18.3.0
   react-dom: ^18.3.0
   recharts: ^2.15.4
@@ -72,6 +72,7 @@ onlyBuiltDependencies:
   - supabase
 
 overrides:
+  sharp: 0.35.5
   '@ardatan/relay-compiler>immutable': ^3.8.3
   fast-xml-parser: ^5.7.3
   '@mapbox/node-pre-gyp>tar': ^7.5.11
