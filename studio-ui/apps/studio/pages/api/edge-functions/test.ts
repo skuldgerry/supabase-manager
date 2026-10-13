@@ -32,7 +32,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     if (typeof requestUrl !== 'string' || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(method)) {
       return res.status(400).json({ status: 400, error: { message: 'Invalid function test request' } })
     }
-    let url = requestUrl
+    let url: URL | undefined
     let brokerProjectId: string | undefined
     let actorEmail: string | undefined
     if (!IS_PLATFORM) {
@@ -67,17 +67,30 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         if (!['http:', 'https:'].includes(internal.protocol) || internal.username || internal.password) {
           return res.status(503).json({ status: 503, error: { message: 'Project gateway is not configured' } })
         }
-        url = internal.origin + path
+        // Assign only path/query on the trusted gateway URL, never a relative URL.
+        url = new URL(internal.origin)
+        const requested = new URL(requestUrl)
+        url.pathname = requested.pathname
+        url.search = requested.search
       }
     }
 
-    const validEdgeFnUrl = IS_PLATFORM ? isValidEdgeFunctionURL(url, true) : true
+    const validEdgeFnUrl = IS_PLATFORM ? isValidEdgeFunctionURL(requestUrl, true) : true
 
     if (!validEdgeFnUrl) {
       return res.status(400).json({
         status: 400,
         error: { message: 'Provided URL is not a valid Supabase edge function URL' },
       })
+    }
+
+    if (IS_PLATFORM) {
+      const requested = new URL(requestUrl)
+      // Validation above confines this hostname to the configured Supabase domain.
+      url = new URL('https://supabase.co')
+      url.hostname = requested.hostname
+      url.pathname = requested.pathname
+      url.search = requested.search
     }
 
     const functionHeaders = edgeFunctionRequestHeaders(customHeaders)
@@ -95,7 +108,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
 
     const response = brokerProjectId
       ? await testManagerBrokerFunction(brokerProjectId, { actorEmail: actorEmail!, url: requestUrl, method, headers: requestHeaders, body: finalBody })
-      : await fetch(url, {
+      : await fetch(url!, {
       method,
       headers: requestHeaders,
       body: finalBody,

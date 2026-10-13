@@ -26,9 +26,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     const publicOrigin = process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL
     const path = !IS_PLATFORM && publicOrigin ? edgeFunctionPath(requestUrl, publicOrigin) : undefined
     const internal = !IS_PLATFORM && process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL) : undefined
-    const url = IS_PLATFORM ? requestUrl : internal && path ? internal.origin + path : ''
     const validEdgeFnUrl = IS_PLATFORM
-      ? isValidEdgeFunctionURL(url, true)
+      ? isValidEdgeFunctionURL(requestUrl, true)
       : Boolean(internal && ['http:', 'https:'].includes(internal.protocol) && !internal.username && !internal.password && path)
 
     if (!validEdgeFnUrl) {
@@ -37,6 +36,13 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         error: { message: 'Provided URL is not a valid Supabase edge function URL' },
       })
     }
+
+    const requested = new URL(requestUrl)
+    const url = new URL(IS_PLATFORM ? 'https://supabase.co' : internal!.origin)
+    if (IS_PLATFORM) url.hostname = requested.hostname
+    // Property assignment preserves the trusted authority even for a // pathname.
+    url.pathname = requested.pathname
+    url.search = requested.search
 
     const functionHeaders = edgeFunctionRequestHeaders(customHeaders)
     const requestHeaders = Object.fromEntries(functionHeaders.entries())

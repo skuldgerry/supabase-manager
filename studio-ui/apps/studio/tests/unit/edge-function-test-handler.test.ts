@@ -38,6 +38,8 @@ async function request(body: Record<string, unknown> = {}, cookie = 'valid-sessi
 }
 describe('manager function test boundary', () => {
   beforeEach(() => {
+    vi.unstubAllGlobals()
+    Object.assign(state.mode, { IS_PLATFORM: false, STUDIO_AUTH_MANAGER: true, STUDIO_AUTH_GOTRUE: false })
     state.member = { gotrue_id: 'user-1', primary_email: 'member@example.com' }
     state.members = [{ gotrue_id: 'user-1' }]
     state.brokerEnabled = true
@@ -83,5 +85,31 @@ describe('manager function test boundary', () => {
     expect((await request({ method: 'HEAD' })).payload).toEqual({ status: 200, headers: { 'content-type': 'application/json' }, body: '' })
     expect(state.invoke).toHaveBeenLastCalledWith('broker-project-1', expect.objectContaining({ method: 'HEAD', body: undefined }))
     expect((await request({ method: 'OPTIONS' })).code).toBe(200)
+  })
+  it('constructs legacy requests on the stored gateway while preserving the path and query', async () => {
+    state.mode.STUDIO_AUTH_MANAGER = false
+    state.brokerEnabled = false
+    const fetchFunction = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetchFunction)
+    expect((await request()).code).toBe(200)
+    expect(fetchFunction.mock.calls[0][0]).toBeInstanceOf(URL)
+    expect(fetchFunction.mock.calls[0][0].href).toBe('https://project.example/functions/v1/hello?q=a%20b')
+    for (const url of ['https://attacker.example/functions/v1/hello', 'https://project.example/functions/v1/%2e%2e/admin']) {
+      expect((await request({ url })).code).toBe(400)
+    }
+    expect(fetchFunction).toHaveBeenCalledTimes(1)
+  })
+  it('reconstructs platform requests only on an allowed Supabase hostname', async () => {
+    state.mode.IS_PLATFORM = true
+    const fetchFunction = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetchFunction)
+    const url = 'https://uniquetwentychararef.supabase.co/functions/v1/hello?q=a%20b'
+    expect((await request({ url })).code).toBe(200)
+    expect(fetchFunction.mock.calls[0][0]).toBeInstanceOf(URL)
+    expect(fetchFunction.mock.calls[0][0].href).toBe(url)
+    for (const invalid of ['https://uniquetwentychararef.supabase.co.attacker.test/functions/v1/hello', 'https://uniquetwentychararef.supabase.co/functions/v1/../admin', 'https://uniquetwentychararef.supabase.co:8443/functions/v1/hello']) {
+      expect((await request({ url: invalid })).code).toBe(400)
+    }
+    expect(fetchFunction).toHaveBeenCalledTimes(1)
   })
 })
