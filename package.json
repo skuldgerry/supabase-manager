@@ -22,7 +22,7 @@
   "dependencies": {
     "@node-rs/argon2": "2.1.0",
     "better-sqlite3": "13.0.3",
-    "next": "16.3.2",
+    "next": "16.3.8",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "4.4.3"
@@ -33,8 +33,11 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "16.3.2",
+    "eslint-config-next": "16.3.8",
     "tsx": "^4.21.0",
     "typescript": "^5.9.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
   }
 }

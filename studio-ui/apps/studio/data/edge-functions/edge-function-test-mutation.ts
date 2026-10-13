@@ -12,19 +12,20 @@ export type EdgeFunctionTestResponse = {
 }
 
 export type EdgeFunctionTestVariables = {
+  projectRef?: string
   url: string
   method: string
   body: string
   headers: { [key: string]: string }
 }
 
-export async function testEdgeFunction({ url, method, body, headers }: EdgeFunctionTestVariables) {
+export async function testEdgeFunction({ projectRef, url, method, body, headers }: EdgeFunctionTestVariables) {
   const defaultHeaders = await constructHeaders()
 
   const response = await fetchHandler(`${BASE_PATH}/api/edge-functions/test`, {
     method: 'POST',
     headers: { ...defaultHeaders, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, method, body, headers }),
+    body: JSON.stringify({ projectRef, url, method, body, headers }),
   })
 
   let data: any

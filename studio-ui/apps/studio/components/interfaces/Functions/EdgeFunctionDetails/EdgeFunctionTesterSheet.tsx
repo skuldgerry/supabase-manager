@@ -210,6 +210,7 @@ export const EdgeFunctionTesterSheet = ({ visible, onClose }: EdgeFunctionTester
     const finalUrl = queryString ? `${url}?${queryString}` : url
 
     testEdgeFunction({
+      projectRef,
       url: finalUrl,
       method: values.method,
       body: values.body,

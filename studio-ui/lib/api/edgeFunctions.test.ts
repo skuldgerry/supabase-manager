@@ -49,7 +49,7 @@ describe('isValidEdgeFunctionURL', () => {
 
   it('should match valid local edge function URLs off platform', () => {
     for (const url of validLocalEdgeFunctionsUrls) {
-      expect(isValidEdgeFunctionURL(url, false), `Expected ${url} to be valid`).toBe(true)
+      expect(isValidEdgeFunctionURL(url, false, new URL(url).origin), `Expected ${url} to be valid`).toBe(true)
     }
   })
 
