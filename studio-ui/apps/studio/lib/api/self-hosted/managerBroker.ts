@@ -283,7 +283,7 @@ export function updateManagerBrokerProjectLifecycle(
 
 export function updateManagerBrokerProjectRelease(
   projectId: string,
-  input: { actorEmail: string; targetRelease: string }
+  input: { actorEmail: string; targetRelease?: string; recoverJobId?: string }
 ) {
   return brokerRequest<ManagerBrokerProjectView>(
     `/api/internal/v1/projects/${encodeURIComponent(projectId)}/update`,

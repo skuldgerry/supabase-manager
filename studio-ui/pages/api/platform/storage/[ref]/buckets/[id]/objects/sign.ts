@@ -1,9 +1,6 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextApiRequest, NextApiResponse } from 'next'
 
-import apiWrapper from '@/lib/api/apiWrapper'
-
-const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!)
+import { storageApiWrapper as apiWrapper, getProjectStorageClient, projectStorageUrl } from '@/lib/api/self-hosted/storageClient'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -20,6 +17,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
+  const supabase = await getProjectStorageClient(req)
   const { id } = req.query
   const { path, expiresIn = 60 * 60 * 24 } = req.body
 
@@ -28,13 +26,7 @@ const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).json({ error: { message: error.message } })
   }
 
-  // change the domain name to the SUPABASE_PUBLIC_URL since SUPABASE_URL is not accessible from the client
-  const signedUrl = new URL(data.signedUrl)
-  const parsed = new URL(process.env.SUPABASE_PUBLIC_URL!)
-  signedUrl.protocol = parsed.protocol
-  signedUrl.host = parsed.host
-  signedUrl.port = parsed.port
-  data.signedUrl = signedUrl.href
+  data.signedUrl = projectStorageUrl(req, data.signedUrl)
 
   return res.status(200).json(data)
 }

@@ -527,6 +527,7 @@ export class ControlPlaneRepository {
       if (!project) throw new Error("project not found");
       this.requireManager(project.organizationId, requestedBy);
       if (project.status === "deleting") throw new Error("project deletion is already queued");
+      if (this.listRunnableJobs().some((job) => job.projectId === projectId)) throw new Error("Wait for the current project operation to finish before deleting it");
       this.updateProjectStatus(projectId, "deleting");
       const job = this.createJob({ type: "delete-project", projectId, requestedBy, maxAttempts: 1 });
       this.appendJobEvent({ jobId: job.id, stage: "stopping-services", level: "info", message: "Project deletion accepted" });

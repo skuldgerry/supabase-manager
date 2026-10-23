@@ -118,7 +118,7 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
     }
     await writeFile(envPath, await projectEnvironment(project.id), { mode: 0o600 })
     const compose = {
-      files: [composePath, overridePath],
+      files: [composePath, overridePath, ...(await exists(path.join(projectDir, 'manager.images.yml')) ? [path.join(projectDir, 'manager.images.yml')] : [])],
       envFile: envPath,
       projectName: dockerProjectName(project.id),
     } as const

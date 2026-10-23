@@ -42,11 +42,11 @@ const UPDATE_STAGES = [
   ['validating', 'Validating release compatibility'],
   ['preparing-release', 'Preparing official release'],
   ['updating-configuration', 'Preparing release configuration'],
-  ['creating-backup', 'Backing up PostgreSQL'],
   ['pulling-images', 'Pulling official images'],
+  ['creating-backup', 'Snapshotting database and Storage'],
   ['starting-services', 'Recreating Supabase services'],
   ['functional-checks', 'Running functional checks'],
-  ['rolling-back', 'Restoring previous release'],
+  ['rolling-back', 'Restoring data and previous release'],
   ['ready', 'Update complete'],
 ] as const
 
@@ -62,9 +62,27 @@ export function BrokerDeploymentProgress({
   const router = useRouter()
   const [view, setView] = useState<JobView | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
+  const [recovering, setRecovering] = useState(false)
+
+  const retryRecovery = async () => {
+    setRecovering(true)
+    try {
+      const response = await fetch(`/api/platform/projects/${encodeURIComponent(projectRef)}/update`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recoverJobId: view?.job?.id }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body?.error?.message ?? 'Recovery could not be queued')
+      router.reload()
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : 'Recovery could not be queued')
+    } finally { setRecovering(false) }
+  }
 
   useEffect(() => {
     let cancelled = false
+    setView(null)
+    setRequestError(null)
     let timer: ReturnType<typeof setTimeout> | undefined
     const load = async () => {
       try {
@@ -132,7 +150,7 @@ export function BrokerDeploymentProgress({
 
           {(requestError || view?.job?.errorMessage) && (
             <Card className="border-destructive-500 bg-destructive-200 p-4 text-sm text-destructive">
-              {view?.job?.errorMessage ?? requestError}
+              {requestError ?? view?.job?.errorMessage}
             </Card>
           )}
 
@@ -168,7 +186,10 @@ export function BrokerDeploymentProgress({
             </Card>
           </div>
 
-          {failed && <Button type="default" onClick={() => router.reload()}>Retry status check</Button>}
+          {failed && view?.job?.type === 'update-project' && view.project.status !== 'ready' && (
+            <Button type="default" loading={recovering} onClick={() => void retryRecovery()}>Retry recovery</Button>
+          )}
+          {failed && <Button type="default" onClick={() => router.reload()}>Refresh status</Button>}
         </div>
       </ScaffoldSection>
     </ScaffoldContainer>

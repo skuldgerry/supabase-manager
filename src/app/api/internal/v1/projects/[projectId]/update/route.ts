@@ -1,19 +1,23 @@
 import { z } from 'zod'
+import path from 'node:path'
 
 import { getRepository } from '@/lib/db/manager'
-import type { ProjectId } from '@/lib/domain'
+import type { JobId, ProjectId } from '@/lib/domain'
+import { getConfig } from '@/lib/config'
 import { authorizeInternalRequest, unauthorizedInternalResponse } from '@/lib/internal/auth'
 import { internalProjectView } from '@/lib/internal/project-view'
 import { adapterForRelease } from '@/lib/orchestrator/adapters'
 import { scheduleUpdate } from '@/lib/orchestrator/broker'
 import { getRecentOfficialReleases } from '@/lib/orchestrator/release-catalog'
+import { readRecoveryManifest } from '@/lib/orchestrator/update-recovery'
 
 export const dynamic = 'force-dynamic'
 
 const bodySchema = z.object({
   actorEmail: z.email(),
-  targetRelease: z.string().trim().regex(/^self-hosted\/v\d+\.\d+\.\d+$/),
-})
+  targetRelease: z.string().trim().regex(/^self-hosted\/v\d+\.\d+\.\d+$/).optional(),
+  recoverJobId: z.uuid().optional(),
+}).refine((body) => Boolean(body.targetRelease) !== Boolean(body.recoverJobId), 'Choose a target release or a recovery job')
 const querySchema = z.object({ actorEmail: z.email() })
 
 function version(release: string): number[] {
@@ -71,20 +75,36 @@ export async function POST(
   if (project.ownership !== 'manager-owned') {
     return Response.json({ error: 'Imported projects remain under their external operator and cannot be updated by the broker' }, { status: 409 })
   }
+  const existing = repository.listRunnableJobs().find((job) => job.projectId === project.id)
+  if (existing) return Response.json(await internalProjectView(project, existing), { status: 202 })
+  if (parsed.data.recoverJobId) {
+    const failed = repository.getJob(parsed.data.recoverJobId as JobId)
+    if (!failed || failed.projectId !== project.id || failed.type !== 'update-project' || failed.status !== 'failed' || project.status === 'ready') {
+      return Response.json({ error: 'No failed update requires recovery' }, { status: 409 })
+    }
+    try {
+      const recovery = await readRecoveryManifest(path.join(getConfig().dataDir, 'projects', project.id, 'backups', `update-${failed.id}`), project.id, failed.id)
+      if (!recovery) return Response.json({ error: 'The recovery point is unavailable' }, { status: 409 })
+    } catch {
+      return Response.json({ error: 'The recovery point could not be verified' }, { status: 409 })
+    }
+    repository.updateJobState(failed.id, { status: 'running', stage: 'rolling-back' })
+    scheduleUpdate(failed.id)
+    return Response.json(await internalProjectView(project, repository.getJob(failed.id)!), { status: 202 })
+  }
+  const targetRelease = parsed.data.targetRelease!
   if (project.status !== 'ready') {
     return Response.json({ error: 'The project must be ready before it can be updated' }, { status: 409 })
   }
-  if (!isNewer(parsed.data.targetRelease, project.stackRelease)) {
+  if (!isNewer(targetRelease, project.stackRelease)) {
     return Response.json({ error: 'Choose an official release newer than the current project release' }, { status: 409 })
   }
   try {
-    adapterForRelease(parsed.data.targetRelease)
+    adapterForRelease(targetRelease)
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unsupported release' }, { status: 400 })
   }
 
-  const existing = repository.listRunnableJobs().find((job) => job.projectId === project.id)
-  if (existing) return Response.json(await internalProjectView(project, existing), { status: 202 })
 
   const job = repository.createJob({
     type: 'update-project',
@@ -96,8 +116,8 @@ export async function POST(
     jobId: job.id,
     stage: 'validating',
     level: 'info',
-    message: `Project update to ${parsed.data.targetRelease} accepted`,
-    details: { targetRelease: parsed.data.targetRelease },
+    message: `Project update to ${targetRelease} accepted`,
+    details: { targetRelease },
   })
   scheduleUpdate(job.id)
   return Response.json(await internalProjectView(project, job), { status: 202 })

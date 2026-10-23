@@ -51,6 +51,19 @@ Supabase Cloud preview branches are not part of the official self-hosted
 stack. Database backups are operator-managed in V1; the manager does not imply
 that Cloud backup or PITR services are available.
 
+## Project updates and recovery
+
+Manager-owned projects can be updated from **Project Settings > General**.
+The broker retains a cold recovery point of the managed volumes, configuration,
+and exact images before switching releases, with durable progress and recovery
+diagnostics. Imported deployments remain operator-managed. See
+[updating projects](./docs/updating.md) for supported configurations, downtime,
+backup retention, and recovery limitations.
+
+The recovery primitives have isolated Docker tests; a complete official-stack
+release upgrade and rollback rehearsal remains pending. Keep independent,
+tested off-host backups.
+
 ## Run
 
 The broker requires a Linux Docker Engine and access to its Docker socket. The
