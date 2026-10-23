@@ -60,6 +60,10 @@ record does not remove, stop, or reconfigure the original Compose deployment.
 
 ## Health and diagnostics
 
+For manager-owned stack upgrades and coordinated recovery, see
+[Updating projects](updating.md). Imported projects retain their original
+operator-managed update workflow.
+
 Both images include Docker healthchecks. Inspect startup and health state with:
 
 ```sh

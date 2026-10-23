@@ -1,6 +1,6 @@
 {
   "name": "supabase-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "A self-hosted control plane for isolated official Supabase deployments.",
   "repository": {
@@ -28,6 +28,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@supabase/supabase-js": "2.103.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",

@@ -10,9 +10,10 @@ import { DirectCommandRunner } from "./command-runner";
 import { generateComposeOverride } from "./compose";
 import { boundedDiagnosticText, sanitizeText } from "./diagnostics";
 import { DockerCliHostDriver } from "./docker-driver";
-import { dockerProjectName, PROJECT_LABEL, projectContainerName } from "./naming";
+import { dockerProjectName, PROJECT_LABEL, projectContainerName, projectNetworkName } from "./naming";
 import { asProjectId, type CommandRunner } from "./types";
 import { ensureProjectVolumes, type PlannedVolume, type VolumePurpose } from "./volumes";
+import { assertRecoverableLayout, createVolumeRecoveryPoint, maintenanceOverride, pinConfiguredProjectImages, pinRunningProjectImages, readRecoveryManifest, restoreVolumeRecoveryPoint, stopProjectForRecovery, verifyRollbackImages, writeRecoveryManifest, type RecoveryManifest } from "./update-recovery";
 
 type CustomCredentials = {
   postgresPassword: string;
@@ -556,6 +557,7 @@ async function functionalCheckProject(
   projectId: DomainProjectId,
   apiPort: number,
   credentials: ProjectCredentials,
+  privateGateway?: string,
 ): Promise<void> {
   const dbContainer = projectContainerName(asProjectId(projectId), "db");
   const databaseCheck = await runner.run({
@@ -569,6 +571,19 @@ async function functionalCheckProject(
   if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") {
     throw new Error("required Supabase database roles or schemas are missing after the update");
   }
+  if (privateGateway) {
+    const helper = `sm_health_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await runChecked(runner, "docker", ["create", "--name", helper, "--label", `com.supabase-manager.recovery-project=${projectId}`, "--network", projectNetworkName(asProjectId(projectId)),
+        "--env", `GATEWAY=${privateGateway}`, "--env", `ANON_KEY=${credentials.ANON_KEY}`, "--env", `SERVICE_ROLE_KEY=${credentials.SERVICE_ROLE_KEY}`,
+        "alpine:3.23", "sh", "-ec",
+        'wget -q -O /dev/null --header="apikey: $ANON_KEY" --header="Authorization: Bearer $ANON_KEY" "http://$GATEWAY:8000/auth/v1/health"; wget -q -O /dev/null --header="apikey: $SERVICE_ROLE_KEY" --header="Authorization: Bearer $SERVICE_ROLE_KEY" "http://$GATEWAY:8000/rest/v1/"; wget -q -O /dev/null "http://storage:5000/status"']);
+      await runChecked(runner, "docker", ["start", "--attach", helper]);
+    } finally {
+      await runner.run({ executable: "docker", args: ["rm", "--force", helper], timeoutMs: 60_000 });
+    }
+    return;
+  }
   const projectApi = `http://${getConfig().projectHost}:${apiPort}`;
   const anonHeaders = { apikey: credentials.ANON_KEY, Authorization: `Bearer ${credentials.ANON_KEY}` };
   const serviceHeaders = { apikey: credentials.SERVICE_ROLE_KEY, Authorization: `Bearer ${credentials.SERVICE_ROLE_KEY}` };
@@ -579,9 +594,10 @@ async function functionalCheckProject(
 
 /**
  * Switch a manager-owned project to another pinned official self-hosted release.
- * Persistent data volumes and credentials are retained. Release-scoped config
- * volumes are rebuilt from the target tag. A failed switch is rolled back to
- * the prior Compose configuration before the job is marked failed.
+ * A cold snapshot covers database, Storage and configuration before candidate
+ * services can migrate anything. Client ports reopen only after verification.
+ * Interrupted pre-commit jobs restore data plus old images; committed jobs
+ * finish activation without discarding writes accepted by the verified release.
  */
 export async function runUpdateJob(jobId: JobId): Promise<void> {
   const repository = getRepository();
@@ -602,27 +618,94 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
   const projectDir = path.join(config.dataDir, "projects", project.id);
   const currentComposePath = path.join(projectDir, "docker-compose.yml");
   const currentOverridePath = path.join(projectDir, "manager.override.yml");
+  const currentImagesPath = path.join(projectDir, "manager.images.yml");
   const vendorDir = path.join(projectDir, "vendor");
-  const previousVendorDir = path.join(projectDir, "vendor.previous");
   const updateDir = path.join(projectDir, `update-${job.id}`);
-  const rollbackDir = path.join(projectDir, `rollback-${job.id}`);
+  const rollbackDir = path.join(projectDir, "backups", `update-${job.id}`);
   const candidateComposePath = path.join(updateDir, "docker-compose.yml");
   const candidateOverridePath = path.join(updateDir, "manager.override.yml");
   const candidateEnvPath = path.join(updateDir, ".env");
+  const candidateImagesPath = path.join(updateDir, "manager.images.yml");
+  const maintenancePath = path.join(projectDir, `maintenance-${job.id}.yml`);
   const rollbackComposePath = path.join(rollbackDir, "docker-compose.yml");
   const rollbackOverridePath = path.join(rollbackDir, "manager.override.yml");
   const rollbackEnvPath = path.join(rollbackDir, ".env");
+  const rollbackImagesPath = path.join(rollbackDir, "images.yml");
   let secrets: string[] = [];
-  let attemptedSwitch = false;
   let previousEnvironment: string | undefined;
+  let recovery: RecoveryManifest | undefined;
 
   const stage = (next: DeploymentStage, message: string) => {
     repository.updateJobState(job.id, { status: "running", stage: next });
     repository.appendJobEvent({ jobId: job.id, stage: next, level: "info", message });
   };
 
+  const activate = async (files: readonly string[], envFile: string, release: string, environment: string) => {
+    const adapter = adapterForRelease(release);
+    await driver.compose({ files, envFile, projectName: dockerProjectName(projectId), args: ["up", "--detach", "--remove-orphans"] });
+    await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
+      ? `realtime-dev.${dockerProjectName(projectId)}_realtime` : projectContainerName(projectId, service)));
+    await functionalCheckProject(runner, project.id, project.ports.api, credentialsFromEnvironment(environment));
+  };
+
+  const restore = async () => {
+    if (!recovery) return;
+    stage("rolling-back", "Restoring the coordinated recovery point; client ports remain closed");
+    repository.updateProjectStatus(project.id, "provisioning");
+    const envelope = JSON.parse(await readFile(path.join(rollbackDir, "environment.enc.json"), "utf8")) as EncryptedEnvelope;
+    previousEnvironment = decryptJson<string>(envelope, await getMasterKey(), `${project.id}:${job.id}:update-recovery`);
+    secrets = Object.values(credentialsFromEnvironment(previousEnvironment));
+    await writeFile(rollbackEnvPath, previousEnvironment, { mode: 0o600 });
+    await verifyRollbackImages(runner, await readFile(rollbackImagesPath, "utf8"));
+    await stopProjectForRecovery(runner, project.id);
+    if (["switching", "restoring"].includes(recovery.phase)) {
+      recovery = { ...recovery, phase: "restoring" };
+      await writeRecoveryManifest(rollbackDir, recovery);
+      await restoreVolumeRecoveryPoint(runner, rollbackDir, recovery, (message) => stage("rolling-back", message));
+    }
+    const adapter = adapterForRelease(recovery.previousRelease);
+    await writeFile(maintenancePath, maintenanceOverride(adapter.gatewayService), { mode: 0o600 });
+    const files = [rollbackComposePath, rollbackOverridePath, rollbackImagesPath];
+    await driver.compose({ files: [...files, maintenancePath], envFile: rollbackEnvPath, projectName: dockerProjectName(projectId), args: ["up", "--detach", "--remove-orphans"] });
+    await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
+      ? `realtime-dev.${dockerProjectName(projectId)}_realtime` : projectContainerName(projectId, service)));
+    await functionalCheckProject(runner, project.id, project.ports.api, credentialsFromEnvironment(previousEnvironment), adapter.gatewayService);
+    await copyFile(rollbackComposePath, currentComposePath);
+    await copyFile(rollbackOverridePath, currentOverridePath);
+    await copyFile(rollbackImagesPath, currentImagesPath);
+    await saveProjectEnvironmentAndCredentials(project.id, previousEnvironment);
+    if (await exists(path.join(rollbackDir, "vendor"))) {
+      await rm(vendorDir, { recursive: true, force: true });
+      await cp(path.join(rollbackDir, "vendor"), vendorDir, { recursive: true });
+    }
+    repository.updateProjectRelease(project.id, recovery.previousRelease);
+    // Persist restoration before reopening client ports. A restart must not discard new writes.
+    recovery = { ...recovery, phase: "restored" };
+    await writeRecoveryManifest(rollbackDir, recovery);
+    await activate([currentComposePath, currentOverridePath, currentImagesPath], rollbackEnvPath, recovery.previousRelease, previousEnvironment);
+    repository.updateProjectStatus(project.id, "ready");
+  };
+
   try {
     if (project.ownership !== "manager-owned") throw new Error("externally managed projects cannot be updated by the broker");
+    recovery = await readRecoveryManifest(rollbackDir, project.id, job.id);
+    if (recovery) {
+      if (recovery.phase === "committed") {
+        stage("starting-services", "Completing activation of the verified release after an interrupted update");
+        const environment = await loadEncryptedCredential<string>(project.id, "project-environment");
+        if (!environment) throw new Error("Committed project environment is unavailable");
+        await writeFile(candidateEnvPath, environment, { mode: 0o600 });
+        await activate([currentComposePath, currentOverridePath, currentImagesPath], candidateEnvPath, recovery.targetRelease, environment);
+        repository.updateProjectRelease(project.id, recovery.targetRelease);
+        repository.updateProjectStatus(project.id, "ready");
+        repository.updateJobState(job.id, { status: "succeeded", stage: "ready" });
+        return;
+      }
+      await restore();
+      repository.updateJobState(job.id, { status: "failed", errorCode: "UPDATE_RECOVERED", errorMessage: "Interrupted update recovered; the previous release and its recovery point were restored." });
+      repository.appendJobEvent({ jobId: job.id, stage: "rolling-back", level: "info", message: "Recovery completed. The previous release is ready; the backup was retained." });
+      return;
+    }
     if (project.status !== "ready") throw new Error("the project must be ready before it can be updated");
     if (targetRelease === project.stackRelease) throw new Error("the project already uses the selected release");
     const adapter = adapterForRelease(targetRelease);
@@ -644,14 +727,12 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
     ]);
     await validateOfficialReleaseLayout(targetUpstream, adapter);
     await rm(updateDir, { recursive: true, force: true });
-    await rm(rollbackDir, { recursive: true, force: true });
-    // Discard only the older fallback snapshot before any runtime mutation.
-    // If this fails, the update stops while the active project is untouched.
-    await rm(previousVendorDir, { recursive: true, force: true });
     await mkdir(rollbackDir, { recursive: true, mode: 0o700 });
     await copyFile(currentComposePath, rollbackComposePath);
     await copyFile(currentOverridePath, rollbackOverridePath);
-    await writeFile(rollbackEnvPath, previousEnvironment, { mode: 0o600 });
+    await writeFile(rollbackImagesPath, await pinRunningProjectImages(runner, project.id), { mode: 0o600 });
+    await writeFile(path.join(rollbackDir, "environment.enc.json"), JSON.stringify(encryptJson(previousEnvironment, await getMasterKey(), `${project.id}:${job.id}:update-recovery`)), { mode: 0o600 });
+    await cp(await exists(vendorDir) ? vendorDir : baseUpstream, path.join(rollbackDir, "vendor"), { recursive: true });
     if (await exists(path.join(vendorDir, ".supabase-version"))) {
       await cp(vendorDir, updateDir, { recursive: true, force: true });
     } else {
@@ -752,32 +833,40 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
     } as const;
     const renderedCandidate = await driver.compose({ ...candidate, args: ["config", "--format", "json"] });
     assertNoBindMounts(renderedCandidate.stdout);
-
-    stage("creating-backup", "Creating a pre-update PostgreSQL logical backup");
-    const backupDir = path.join(projectDir, "backups");
-    await mkdir(backupDir, { recursive: true, mode: 0o700 });
-    const backupName = `pre-update-${new Date().toISOString().replace(/[:.]/g, "-")}.sql`;
-    const containerBackup = `/tmp/${backupName}`;
-    const dbContainer = projectContainerName(projectId, "db");
-    await runChecked(runner, "docker", ["exec", dbContainer, "pg_dumpall", "-U", "postgres", "--file", containerBackup], { timeoutMs: 30 * 60_000 });
-    await runChecked(runner, "docker", ["cp", `${dbContainer}:${containerBackup}`, path.join(backupDir, backupName)], { timeoutMs: 30 * 60_000 });
-    await runner.run({ executable: "docker", args: ["exec", dbContainer, "rm", "-f", containerBackup], timeoutMs: 60_000 });
+    const currentSpec = { files: [currentComposePath, currentOverridePath], envFile: candidateEnvPath, projectName: dockerProjectName(projectId) };
+    const renderedCurrent = await driver.compose({ ...currentSpec, args: ["config", "--format", "json"] });
+    assertRecoverableLayout(renderedCurrent.stdout, project.id, project.stackRelease);
+    assertRecoverableLayout(renderedCandidate.stdout, project.id, targetRelease);
 
     stage("pulling-images", "Pulling image versions pinned by the target official release");
     await driver.compose({ ...candidate, args: ["pull"] });
+    await runChecked(runner, "docker", ["pull", "alpine:3.23"]);
+    await writeFile(candidateImagesPath, await pinConfiguredProjectImages(runner, renderedCandidate.stdout), { mode: 0o600 });
+    await verifyRollbackImages(runner, await readFile(rollbackImagesPath, "utf8"));
+    recovery = { version: 1, projectId: project.id, jobId: job.id, previousRelease: project.stackRelease, targetRelease, phase: "prepared", createdAt: new Date().toISOString(), volumes: [] };
+    await writeRecoveryManifest(rollbackDir, recovery);
+    stage("creating-backup", "Closing client connections and creating a coordinated PostgreSQL and Storage recovery point");
+    recovery = { ...recovery, phase: "snapshotting" };
+    await writeRecoveryManifest(rollbackDir, recovery);
+    repository.updateProjectStatus(project.id, "provisioning");
+    await stopProjectForRecovery(runner, project.id);
+    recovery = await createVolumeRecoveryPoint(runner, rollbackDir, recovery, (message) => stage("creating-backup", message));
+    await writeFile(maintenancePath, maintenanceOverride(adapter.gatewayService), { mode: 0o600 });
     stage("starting-services", "Recreating project services with the target official release");
-    attemptedSwitch = true;
-    await driver.compose({ ...candidate, args: ["up", "--detach", "--remove-orphans"] });
+    recovery = { ...recovery, phase: "switching" };
+    await writeRecoveryManifest(rollbackDir, recovery);
+    await driver.compose({ ...candidate, files: [...candidate.files, candidateImagesPath, maintenancePath], args: ["up", "--detach", "--remove-orphans"] });
     await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
       ? `realtime-dev.${dockerProjectName(projectId)}_realtime`
       : projectContainerName(projectId, service)));
 
     stage("functional-checks", "Checking database roles, schemas, Auth, REST, and Storage after the update");
     const updatedCredentials = credentialsFromEnvironment(mergedEnvironment);
-    await functionalCheckProject(runner, project.id, project.ports.api, updatedCredentials);
+    await functionalCheckProject(runner, project.id, project.ports.api, updatedCredentials, adapter.gatewayService);
 
     await copyFile(candidateComposePath, currentComposePath);
     await copyFile(candidateOverridePath, currentOverridePath);
+    await copyFile(candidateImagesPath, currentImagesPath);
     await saveProjectEnvironmentAndCredentials(project.id, mergedEnvironment);
     await rm(path.join(updateDir, ".env"), { force: true });
     await rm(path.join(updateDir, ".env.rollback"), { force: true });
@@ -787,9 +876,13 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
     // remain encrypted at rest in Manager, so its temporary plaintext archive
     // must not be persisted with the vendor snapshot.
     await rm(path.join(updateDir, "backups"), { recursive: true, force: true });
-    if (await exists(vendorDir)) await rename(vendorDir, previousVendorDir);
-    await rename(updateDir, vendorDir);
+    await cp(updateDir, vendorDir, { recursive: true, force: true });
+    // From here onward recover by completing activation, never by discarding accepted client writes.
+    recovery = { ...recovery, phase: "committed" };
+    await writeRecoveryManifest(rollbackDir, recovery);
     repository.updateProjectRelease(project.id, targetRelease);
+    await writeFile(candidateEnvPath, mergedEnvironment, { mode: 0o600 });
+    await activate([currentComposePath, currentOverridePath, currentImagesPath], candidateEnvPath, targetRelease, mergedEnvironment);
     repository.updateProjectStatus(project.id, "ready");
     repository.updateJobState(job.id, { status: "succeeded", stage: "ready" });
     repository.appendJobEvent({
@@ -801,40 +894,25 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Unknown project update failure";
     let message = boundedDiagnosticText(sanitizeText(raw, secrets));
-    if (attemptedSwitch) {
+    if (recovery && recovery.phase !== "committed") {
       try {
-        stage("rolling-back", `Update failed; restoring ${project.stackRelease}`);
-        const rollbackAdapter = adapterForRelease(project.stackRelease);
-        const rollback = {
-          files: [rollbackComposePath, rollbackOverridePath],
-          envFile: rollbackEnvPath,
-          projectName: dockerProjectName(projectId),
-        } as const;
-        await driver.compose({ ...rollback, args: ["up", "--detach", "--remove-orphans"] });
-        await waitForContainers(runner, rollbackAdapter.services.map((service) => service === rollbackAdapter.realtimeService
-          ? `realtime-dev.${dockerProjectName(projectId)}_realtime`
-          : projectContainerName(projectId, service)));
-        await copyFile(rollbackComposePath, currentComposePath);
-        await copyFile(rollbackOverridePath, currentOverridePath);
-        if (previousEnvironment) await saveProjectEnvironmentAndCredentials(project.id, previousEnvironment);
-        repository.updateProjectRelease(project.id, project.stackRelease);
-        if (await exists(previousVendorDir)) {
-          await rm(vendorDir, { recursive: true, force: true });
-          await rename(previousVendorDir, vendorDir);
-        }
-        repository.updateProjectStatus(project.id, "ready");
-        message = `${message} The previous release was restored successfully.`;
+        await restore();
+        message = `${message} Recovery completed; the previous release and data were restored. The backup was retained.`;
       } catch (rollbackError) {
         repository.updateProjectStatus(project.id, "failed");
         message = `${message} Automatic rollback also failed: ${boundedDiagnosticText(sanitizeText(rollbackError instanceof Error ? rollbackError.message : "unknown rollback failure", secrets))}`;
       }
+    } else if (recovery?.phase === "committed") {
+      repository.updateProjectStatus(project.id, "failed");
+      message += " The verified release is committed; retry activation to preserve client writes. The recovery point was retained.";
     }
     repository.updateJobState(job.id, { status: "failed", errorCode: "UPDATE_FAILED", errorMessage: message });
     repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
   } finally {
     await rm(candidateEnvPath, { force: true }).catch(() => undefined);
+    await rm(rollbackEnvPath, { force: true }).catch(() => undefined);
+    await rm(maintenancePath, { force: true }).catch(() => undefined);
     await rm(path.join(updateDir, "backups"), { recursive: true, force: true }).catch(() => undefined);
-    await rm(rollbackDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

@@ -162,3 +162,15 @@ test("external project adoption records ownership without reserving manager port
   assert.equal(repository.getProject(project.id)?.ownership, "external");
   closeDatabase(db);
 });
+
+test("project deletion cannot race an update or destroy its recovery point", () => {
+  const { db, repository, admin } = fixture();
+  const host = repository.bootstrapLocalHost();
+  const organization = repository.createOrganization({ name: "Recovery", slug: "recovery", createdBy: admin.id }).organization;
+  const project = repository.createProject({ organizationId: organization.id, hostId: host.id, name: "Updating", slug: "updating", stackRelease: "self-hosted/v0.8.0", ports: { api: 8400, dbSession: 54400, dbTransaction: 55400 }, databaseUsername: "postgres", dashboardUsername: "admin", createdBy: admin.id });
+  const job = repository.createJob({ type: "update-project", projectId: project.id, requestedBy: admin.id, maxAttempts: 1 });
+  assert.throws(() => repository.queueProjectDeletion(project.id, admin.id), /current project operation/);
+  repository.updateJobState(job.id, { status: "failed" });
+  assert.equal(repository.queueProjectDeletion(project.id, admin.id).type, "delete-project");
+  closeDatabase(db);
+});

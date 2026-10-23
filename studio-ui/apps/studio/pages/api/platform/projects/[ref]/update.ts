@@ -34,10 +34,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'POST') {
     try {
-      const targetRelease = String(req.body?.targetRelease ?? '')
+      const targetRelease = typeof req.body?.targetRelease === 'string' ? req.body.targetRelease : undefined
+      const recoverJobId = typeof req.body?.recoverJobId === 'string' ? req.body.recoverJobId : undefined
       const view = await updateManagerBrokerProjectRelease(project.broker_project_id, {
         actorEmail: administrator.primary_email,
         targetRelease,
+        recoverJobId,
       })
       updateProjectFields(project.ref, {
         status: 'COMING_UP',
