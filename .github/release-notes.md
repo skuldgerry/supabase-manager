@@ -15,16 +15,16 @@
 
 See [Updating projects](https://github.com/skuldgerry/supabase-manager/blob/v1.0.1/docs/updating.md) for downtime, independent backup requirements, retention, and recovery limitations.
 
-### Verification and remaining limitations
-
-- Root typecheck/lint and focused routing/recovery tests passed, including isolated Docker PostgreSQL/schema/data and Storage restore tests.
-- The Studio production build and isolated runtime Storage smoke test passed. Live bucket listing, folder navigation, and project switching were verified for existing managed/imported projects without changing their stacks.
-- A complete official Supabase release-upgrade/rollback rehearsal remains pending; this release does not claim that end-to-end test has passed.
-- Full Studio TypeScript validation remains outside the build checks. Previously identified dependency advisories are not remediated by this routing/recovery patch.
-
 ### Images
 
 - UI: `skuldgerry/supabase-manager:1.0.1` (also `latest`).
 - Broker: `skuldgerry/supabase-manager:1.0.1-broker` (also `latest-broker`).
 
-Back up all three Manager data volumes before updating the control plane. Updating Manager does not automatically upgrade any Supabase project.
+### Before updating
+
+> [!WARNING]
+> Back up all three Manager data volumes together: `broker-data`, `studio-data`, and `manager-shared` (Compose may prefix their names).
+> They contain your administrator accounts, encrypted project credentials, encryption key, and internal authentication token. Losing these can prevent access to the Manager or decryption of saved credentials.
+> Take a consistent backup with no lifecycle job running and both Manager and broker stopped, and keep a secure copy off the host. Back up each project's database and Storage data separately as well.
+
+Updating Manager does not automatically upgrade any Supabase project.
