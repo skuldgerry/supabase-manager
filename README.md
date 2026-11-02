@@ -60,9 +60,16 @@ diagnostics. Imported deployments remain operator-managed. See
 [updating projects](./docs/updating.md) for supported configurations, downtime,
 backup retention, and recovery limitations.
 
-The recovery primitives have isolated Docker tests; a complete official-stack
-release upgrade and rollback rehearsal remains pending. Keep independent,
-tested off-host backups.
+Keep independent, tested off-host backups of project data and all three
+Manager data volumes.
+
+If a new deployment fails, expand **Live diagnostics** to inspect container
+logs and healthcheck output. **Recheck deployment** checks the actual services
+without changing them; **Resume deployment** starts the retained configuration
+with its original data and credentials. See
+[deployment recovery](./docs/deployment.md#health-and-diagnostics) for details.
+
+See the [changelog](./CHANGELOG.md) for release changes.
 
 ## Run
 

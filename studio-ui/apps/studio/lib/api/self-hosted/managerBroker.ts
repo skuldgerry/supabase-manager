@@ -27,8 +27,9 @@ export type ManagerBrokerJob = {
 export type ManagerBrokerProjectView = {
   project: ManagerBrokerProject
   job?: ManagerBrokerJob
-  events?: { sequence: number; stage?: string | null; level: string; message: string; createdAt: string }[]
+  events?: { sequence: number; stage?: string | null; level: string; message: string; createdAt: string; details?: Record<string, string | number | boolean | null> }[]
   credentialsReady: boolean
+  recovery?: { canRecheck: boolean; canResume: boolean; canDelete: boolean }
 }
 
 export type ManagerBrokerOptions = {
@@ -216,8 +217,13 @@ export function getManagerBrokerOptions(input: {
   return brokerRequest<ManagerBrokerOptions>(`/api/internal/v1/options?${query.toString()}`)
 }
 
-export function getManagerBrokerJob(jobId: string) {
-  return brokerRequest<ManagerBrokerProjectView>(`/api/internal/v1/jobs/${encodeURIComponent(jobId)}`)
+export function getManagerBrokerJob(jobId: string, actorEmail?: string) {
+  const query = actorEmail ? `?actorEmail=${encodeURIComponent(actorEmail)}` : ''
+  return brokerRequest<ManagerBrokerProjectView>(`/api/internal/v1/jobs/${encodeURIComponent(jobId)}${query}`)
+}
+
+export function recoverManagerBrokerDeployment(projectId: string, input: { actorEmail: string; mode: 'verify' | 'resume' }) {
+  return brokerRequest<ManagerBrokerProjectView>(`/api/internal/v1/projects/${encodeURIComponent(projectId)}/recovery`, { method: 'POST', body: JSON.stringify(input) })
 }
 
 export function getManagerBrokerHealth(projectId: string, services?: string | string[]) {

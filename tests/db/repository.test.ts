@@ -174,3 +174,44 @@ test("project deletion cannot race an update or destroy its recovery point", () 
   assert.equal(repository.queueProjectDeletion(project.id, admin.id).type, "delete-project");
   closeDatabase(db);
 });
+
+test("failed initial deployments can be rechecked atomically, without changing credentials or port reservations", () => {
+  const { db, repository, admin } = fixture();
+  const host = repository.bootstrapLocalHost();
+  const organization = repository.createOrganization({ name: "Recovery", slug: "recovery", createdBy: admin.id }).organization;
+  const { project, job: creation } = repository.createProjectDeployment({ organizationId: organization.id, hostId: host.id, name: "Recover", slug: "recover", stackRelease: "self-hosted/v0.8.0", ports: { api: 8500, dbSession: 54500, dbTransaction: 55500 }, databaseUsername: "postgres", dashboardUsername: "admin", createdBy: admin.id });
+  assert.throws(() => repository.queueDeploymentRecovery(project.id, admin.id, "verify"), /current project operation/);
+  repository.updateJobState(creation.id, { status: "failed" });
+  repository.updateProjectStatus(project.id, "failed");
+  const ports = repository.listReservedPorts(host.id);
+  assert.throws(() => repository.queueDeploymentRecovery(project.id, "outsider" as UserId, "resume"), /permission required/);
+  const check = repository.queueDeploymentRecovery(project.id, admin.id, "verify");
+  assert.equal(check.type, "check-project");
+  assert.equal(repository.latestProjectJob(project.id)?.id, check.id);
+  assert.equal(repository.listJobEvents(check.id)[0].details.mode, "verify");
+  assert.equal(repository.queueDeploymentRecovery(project.id, admin.id, "resume").id, check.id);
+  assert.equal(repository.getJob(creation.id)?.status, "failed", "the original failure remains as history");
+  assert.deepEqual(repository.listReservedPorts(host.id), ports);
+  assert.throws(() => repository.queueProjectDeletion(project.id, admin.id), /current project operation/);
+  repository.updateJobState(check.id, { status: "failed" });
+  repository.updateProjectStatus(project.id, "failed");
+  const deletion = repository.queueProjectDeletion(project.id, admin.id);
+  assert.equal(repository.queueProjectDeletion(project.id, admin.id).id, deletion.id);
+  repository.updateJobState(deletion.id, { status: "failed" });
+  assert.notEqual(repository.queueProjectDeletion(project.id, admin.id).id, deletion.id, "a failed cleanup can be retried");
+  closeDatabase(db);
+});
+
+test("deployment recovery cannot become an updater for previously ready or imported projects", () => {
+  const { db, repository, admin } = fixture();
+  const host = repository.bootstrapLocalHost();
+  const organization = repository.createOrganization({ name: "Protected", slug: "protected", createdBy: admin.id }).organization;
+  const project = repository.createProject({ organizationId: organization.id, hostId: host.id, name: "Existing", slug: "existing", stackRelease: "self-hosted/v0.8.0", ports: { api: 8501, dbSession: 54501, dbTransaction: 55501 }, databaseUsername: "postgres", dashboardUsername: "admin", createdBy: admin.id });
+  repository.updateProjectStatus(project.id, "ready");
+  repository.updateProjectStatus(project.id, "failed");
+  assert.throws(() => repository.queueDeploymentRecovery(project.id, admin.id, "resume"), /initial manager-owned/);
+  const imported = repository.adoptExternalProject({ ...project, slug: "imported", ownership: "external", createdBy: admin.id });
+  repository.updateProjectStatus(imported.id, "failed");
+  assert.throws(() => repository.queueDeploymentRecovery(imported.id, admin.id, "resume"), /initial manager-owned/);
+  closeDatabase(db);
+});

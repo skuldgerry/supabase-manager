@@ -12,6 +12,8 @@ import { boundedDiagnosticText, sanitizeText } from "./diagnostics";
 import { DockerCliHostDriver } from "./docker-driver";
 import { dockerProjectName, PROJECT_LABEL, projectContainerName, projectNetworkName } from "./naming";
 import { asProjectId, type CommandRunner } from "./types";
+import { waitForContainers, waitForFunctionalCheck } from "./readiness";
+import { captureDeploymentDiagnostics } from "./deployment-diagnostics";
 import { ensureProjectVolumes, type PlannedVolume, type VolumePurpose } from "./volumes";
 import { assertRecoverableLayout, createVolumeRecoveryPoint, maintenanceOverride, pinConfiguredProjectImages, pinRunningProjectImages, readRecoveryManifest, restoreVolumeRecoveryPoint, stopProjectForRecovery, verifyRollbackImages, writeRecoveryManifest, type RecoveryManifest } from "./update-recovery";
 
@@ -280,39 +282,55 @@ async function seedConfigurationVolumes(runner: CommandRunner, volumes: readonly
   }
 }
 
-async function waitForContainers(runner: CommandRunner, names: readonly string[], timeoutMs = 6 * 60_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let last = "containers have not reported status";
-  while (Date.now() < deadline) {
-    const states: string[] = [];
-    let ready = true;
-    for (const name of names) {
-      const result = await runner.run({ executable: "docker", args: ["inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", name], timeoutMs: 30_000 });
-      const state = result.exitCode === 0 ? result.stdout.trim() : "missing";
-      states.push(`${name}=${state}`);
-      if (state !== "healthy" && state !== "running") ready = false;
-      if (state === "unhealthy" || state === "exited" || state === "dead") throw new Error(`container ${name} reported ${state}`);
-    }
-    if (ready) return;
-    last = states.join(", ");
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-  }
-  throw new Error(`container readiness timed out: ${last}`);
+async function checkHttpEndpoint(url: string, headers?: Record<string, string>): Promise<void> {
+  await waitForFunctionalCheck(new URL(url).pathname, async () => {
+    const response = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(8_000) });
+    await response.body?.cancel();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  });
 }
 
-async function checkHttpEndpoint(url: string, headers?: Record<string, string>): Promise<void> {
-  let lastStatus = 0;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      const response = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
-      lastStatus = response.status;
-      if (response.ok) return;
-    } catch {
-      // Service may still be warming up.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+export function deploymentContainers(projectId: DomainProjectId, release: string): string[] {
+  const adapter = adapterForRelease(release);
+  const id = asProjectId(projectId);
+  return adapter.services.map((service) => service === adapter.realtimeService ? `realtime-dev.${dockerProjectName(id)}_realtime` : projectContainerName(id, service));
+}
+
+function environmentSecrets(environment: string): string[] {
+  return [...parseEnv(environment)].filter(([key]) => /PASSWORD|SECRET|TOKEN|KEY|JWT/.test(key)).map(([, value]) => value);
+}
+
+async function recordDeploymentFailure(jobId: JobId, error: unknown, runner: CommandRunner, secrets: readonly string[], stopServices: boolean): Promise<void> {
+  const repository = getRepository();
+  const job = repository.getJob(jobId);
+  const project = job?.projectId ? repository.getProject(job.projectId) : null;
+  if (!job || !project) return;
+  const message = boundedDiagnosticText(sanitizeText(error instanceof Error ? error.message : "Deployment failed", secrets));
+  repository.appendJobEvent({ jobId, stage: job.stage, level: "error", message });
+  const shouldStop = stopServices && project.ownership === "manager-owned" && !project.readyAt;
+  // Persist failure before awaiting log reads. A broker restart during diagnostics
+  // must resume stopping, rather than replaying initial configuration/seeding.
+  if (shouldStop) repository.updateJobState(jobId, { status: "running", stage: "rolling-back", errorCode: "PROVISIONING_FAILED", errorMessage: message });
+  try {
+    await captureDeploymentDiagnostics(runner, project.id, deploymentContainers(project.id, project.stackRelease), error, secrets, (diagnostic) => {
+      repository.appendJobEvent({ jobId, stage: job.stage, level: "error", message: `Container diagnostics: ${diagnostic.container}`, details: { ...diagnostic } });
+    });
+  } catch {
+    repository.appendJobEvent({ jobId, stage: job.stage, level: "warning", message: "Container logs could not be collected; inspect this project's containers on the Docker host", details: { command: `docker ps -a --filter label=${PROJECT_LABEL}=${project.id}` } });
   }
-  throw new Error(`functional endpoint check failed (${lastStatus || "connection refused"})`);
+  if (shouldStop) {
+    repository.appendJobEvent({ jobId, stage: "rolling-back", level: "warning", message: "Stopping this failed deployment; volumes, credentials and configuration will be retained" });
+    try {
+      await stopProjectForRecovery(runner, project.id);
+      repository.appendJobEvent({ jobId, stage: "rolling-back", level: "info", message: "Failed deployment stopped safely. Fix the reported issue and resume, or explicitly delete the project to remove its data", details: { rollback: "stopped", dataPreserved: true } });
+    } catch {
+      repository.appendJobEvent({ jobId, stage: "rolling-back", level: "error", message: "Automatic stop could not be confirmed. Some project services may still be running; data was not deleted", details: { rollback: "failed", dataPreserved: true, command: `docker ps -a --filter label=${PROJECT_LABEL}=${project.id}` } });
+    }
+  }
+  repository.updateProjectStatus(project.id, "failed");
+  // Keep reservations even after a rollback: retained containers still own them.
+  repository.activateProjectPorts(project.id);
+  repository.updateJobState(jobId, { status: "failed", errorCode: "PROVISIONING_FAILED", errorMessage: message });
 }
 
 function encryptedEnvelopeFor(value: unknown, associatedData: string, key: Buffer) {
@@ -324,9 +342,13 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
   const repository = getRepository();
   const job = repository.getJob(jobId);
   if (!job || !job.projectId || job.type !== "create-project") return;
-  if (job.status === "succeeded" || job.status === "cancelled") return;
+  if (!["queued", "running"].includes(job.status)) return;
   const project = repository.getProject(job.projectId);
   if (!project) return;
+  if (project.status === "ready" && project.readyAt) {
+    repository.updateJobState(job.id, { status: "succeeded", stage: "ready" });
+    return;
+  }
 
   const runner = new DirectCommandRunner();
   const driver = new DockerCliHostDriver(runner);
@@ -344,6 +366,12 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
   };
 
   try {
+    if (project.ownership !== "manager-owned" || project.readyAt) throw new Error("Only an initial manager-owned deployment can be provisioned");
+    if (job.stage === "rolling-back") {
+      secrets = Object.values(await loadEncryptedCredential<ProjectCredentials>(project.id, "project-credentials") ?? {});
+      await recordDeploymentFailure(job.id, new Error(job.errorMessage ?? "Resuming interrupted deployment rollback"), runner, secrets, true);
+      return;
+    }
     stage("validating", "Validated project configuration and official release adapter");
     const dockerVersion = await runner.run({ executable: "docker", args: ["version", "--format", "{{.Server.Version}}"], timeoutMs: 30_000 });
     if (dockerVersion.exitCode !== 0) throw new Error("Docker Engine is unavailable through the configured socket");
@@ -405,7 +433,7 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
       const value = env.get(key);
       if (value) credentialBundle[key] = value;
     }
-    secrets = Object.values(credentialBundle);
+    secrets = environmentSecrets(finalEnvironment);
     if (!credentialsReady) {
       const masterKey = await getMasterKey();
       const associatedData = `${project.id}:project-credentials`;
@@ -456,47 +484,23 @@ export async function runProvisioningJob(jobId: JobId): Promise<void> {
     stage("starting-database", "Starting Postgres 17 and applying official roles and schemas");
     await driver.compose({ ...compose, args: ["up", "--detach", "db"] });
     const dbContainer = projectContainerName(orchestrationProjectId, "db");
-    await waitForContainers(runner, [dbContainer]);
+    const onProgress = (message: string) => repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "info", message });
+    await waitForContainers(runner, [dbContainer], { onProgress });
 
     stage("starting-services", `Starting Auth, REST, Storage, Realtime, Studio, ${adapter.gatewayService === "api-gw" ? "Envoy" : "Kong"}, and Supavisor`);
-    await driver.compose({ ...compose, args: ["up", "--detach"] });
-    await waitForContainers(runner, adapter.services.map((service) => service === adapter.realtimeService
-      ? `realtime-dev.${dockerProjectName(orchestrationProjectId)}_realtime`
-      : projectContainerName(orchestrationProjectId, service)));
+    await waitForFunctionalCheck("Starting official services", async () => { await driver.compose({ ...compose, args: ["up", "--detach"] }); }, { onProgress });
+    await waitForContainers(runner, deploymentContainers(project.id, project.stackRelease), { onProgress });
 
     stage("functional-checks", "Checking database roles, schemas, Auth, REST, and Storage");
-    const databaseCheck = await runner.run({ executable: "docker", args: ["exec", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-tAc",
-      "SELECT (to_regrole('anon') IS NOT NULL AND to_regrole('authenticated') IS NOT NULL AND to_regrole('service_role') IS NOT NULL AND to_regnamespace('auth') IS NOT NULL AND to_regnamespace('storage') IS NOT NULL AND to_regnamespace('_realtime') IS NOT NULL);"], timeoutMs: 30_000 });
-    if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") throw new Error("required Supabase database roles or schemas are missing");
-    const projectApi = `http://${getConfig().projectHost}:${project.ports.api}`;
-    const anonHeaders = { apikey: credentialBundle.ANON_KEY, Authorization: `Bearer ${credentialBundle.ANON_KEY}` };
-    const serviceHeaders = { apikey: credentialBundle.SERVICE_ROLE_KEY, Authorization: `Bearer ${credentialBundle.SERVICE_ROLE_KEY}` };
-    await checkHttpEndpoint(`${projectApi}/auth/v1/health`, anonHeaders);
-    await checkHttpEndpoint(`${projectApi}/rest/v1/`, serviceHeaders);
-    await checkHttpEndpoint(`${projectApi}/storage/v1/status`);
+    await functionalCheckProject(runner, project.id, project.ports.api, credentialBundle);
+    await waitForContainers(runner, deploymentContainers(project.id, project.stackRelease), { onProgress });
 
     repository.activateProjectPorts(project.id);
     repository.updateProjectStatus(project.id, "ready");
     repository.updateJobState(job.id, { status: "succeeded", stage: "ready" });
     repository.appendJobEvent({ jobId: job.id, stage: "ready", level: "info", message: "Project is ready and passed functional checks" });
   } catch (error) {
-    const raw = error instanceof Error ? error.message : "Unknown provisioning failure";
-    const message = boundedDiagnosticText(sanitizeText(raw, secrets));
-    repository.updateProjectStatus(project.id, "failed");
-    // A failed Compose run may still leave created/running containers behind.
-    // Keep their held ports active so another project cannot be assigned the
-    // same host bindings. If Docker cannot be inspected, preserving the ports
-    // is the safer outcome.
-    let hasProjectContainers = true;
-    try {
-      hasProjectContainers = (await driver.listContainers({ "com.supabase-manager.project-id": project.id })).length > 0;
-    } catch {
-      // Docker failure is already represented by the provisioning error.
-    }
-    if (hasProjectContainers) repository.activateProjectPorts(project.id);
-    else repository.releaseProjectPorts(project.id);
-    repository.updateJobState(job.id, { status: "failed", errorCode: "PROVISIONING_FAILED", errorMessage: message });
-    repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message });
+    await recordDeploymentFailure(job.id, error, runner, secrets, true);
   } finally {
     await rm(envPath, { force: true }).catch(() => undefined);
     await rm(`${envPath}.old`, { force: true }).catch(() => undefined);
@@ -508,6 +512,77 @@ export function scheduleProvisioning(jobId: JobId): void {
   const promise = Promise.resolve()
     .then(() => runProvisioningJob(jobId))
     .finally(() => activeJobs.delete(jobId));
+  activeJobs.set(jobId, promise);
+}
+
+/** Reconcile an existing failed creation. Never regenerate secrets or seed database volumes. */
+export async function runDeploymentRecoveryJob(jobId: JobId): Promise<void> {
+  const repository = getRepository();
+  const job = repository.getJob(jobId);
+  if (!job?.projectId || job.type !== "check-project" || !["queued", "running"].includes(job.status)) return;
+  const project = repository.getProject(job.projectId);
+  if (!project || project.deletedAt || project.ownership !== "manager-owned") return;
+  if (project.status === "ready" && project.readyAt) {
+    repository.updateJobState(jobId, { status: "succeeded", stage: "ready" });
+    return;
+  }
+  if (project.readyAt) return;
+  const mode = repository.listJobEvents(job.id).find((event) => event.details.mode)?.details.mode;
+  const runner = new DirectCommandRunner();
+  const projectDir = path.join(getConfig().dataDir, "projects", project.id);
+  const envPath = path.join(projectDir, `.env.recovery-${job.id}`);
+  let secrets: string[] = [];
+  const progress = (message: string) => repository.appendJobEvent({ jobId, stage: repository.getJob(jobId)?.stage, level: "info", message });
+  const stage = (next: DeploymentStage, message: string) => {
+    repository.updateJobState(jobId, { status: "running", stage: next });
+    progress(message);
+  };
+  try {
+    if (mode !== "verify" && mode !== "resume") throw new Error("Deployment recovery mode is missing");
+    const credentials = await loadEncryptedCredential<ProjectCredentials>(project.id, "project-credentials");
+    if (!credentials) throw new Error("Saved credentials are unavailable. Delete this failed deployment explicitly and create a new project");
+    const environment = await loadEncryptedCredential<string>(project.id, "project-environment");
+    secrets = environment ? environmentSecrets(environment) : Object.values(credentials);
+    if (job.stage === "rolling-back") {
+      await recordDeploymentFailure(jobId, new Error(job.errorMessage ?? "Resuming interrupted deployment rollback"), runner, secrets, true);
+      return;
+    }
+    stage("validating", mode === "verify" ? "Checking the existing deployment without changing containers, configuration or data" : "Resuming the saved deployment without regenerating credentials or initializing volumes");
+    if (mode === "resume") {
+      if (!environment) throw new Error("Saved project environment is unavailable; automatic resume is unsafe");
+      const files = [path.join(projectDir, "docker-compose.yml"), path.join(projectDir, "manager.override.yml")];
+      if (!(await Promise.all(files.map(exists))).every(Boolean)) throw new Error("Saved deployment configuration is incomplete; inspect the diagnostics or delete this failed deployment explicitly");
+      if (await exists(path.join(projectDir, "manager.images.yml"))) files.push(path.join(projectDir, "manager.images.yml"));
+      await writeFile(envPath, environment, { mode: 0o600 });
+      const driver = new DockerCliHostDriver(runner);
+      const compose = { files, envFile: envPath, projectName: dockerProjectName(asProjectId(project.id)) };
+      assertNoBindMounts((await driver.compose({ ...compose, args: ["config", "--format", "json"] })).stdout);
+      stage("starting-database", "Starting the existing database with its saved data");
+      await driver.compose({ ...compose, args: ["up", "--detach", "--no-recreate", "--pull", "never", "db"] });
+      await waitForContainers(runner, [projectContainerName(asProjectId(project.id), "db")], { onProgress: progress });
+      stage("starting-services", "Starting retained official services with the same ports, images and credentials");
+      await waitForFunctionalCheck("Starting retained services", async () => { await driver.compose({ ...compose, args: ["up", "--detach", "--no-recreate", "--pull", "never"] }); }, { onProgress: progress });
+    }
+    stage("starting-services", "Observing all required containers and their Docker healthchecks");
+    await waitForContainers(runner, deploymentContainers(project.id, project.stackRelease), { onProgress: progress });
+    stage("functional-checks", "Checking actual database roles and schemas, Auth, REST, and Storage responses");
+    await functionalCheckProject(runner, project.id, project.ports.api, credentials);
+    await waitForContainers(runner, deploymentContainers(project.id, project.stackRelease), { onProgress: progress });
+    repository.activateProjectPorts(project.id);
+    repository.updateProjectStatus(project.id, "ready");
+    repository.updateJobState(jobId, { status: "succeeded", stage: "ready" });
+    progress("Deployment recovered and passed functional checks; existing data and credentials were preserved");
+  } catch (error) {
+    // A read-only recheck must never stop an otherwise running project.
+    await recordDeploymentFailure(jobId, error, runner, secrets, mode === "resume");
+  } finally {
+    await rm(envPath, { force: true }).catch(() => undefined);
+  }
+}
+
+export function scheduleDeploymentRecovery(jobId: JobId): void {
+  if (activeJobs.has(jobId)) return;
+  const promise = Promise.resolve().then(() => runDeploymentRecoveryJob(jobId)).finally(() => activeJobs.delete(jobId));
   activeJobs.set(jobId, promise);
 }
 
@@ -552,7 +627,7 @@ async function saveProjectEnvironmentAndCredentials(
   });
 }
 
-async function functionalCheckProject(
+export async function functionalCheckProject(
   runner: CommandRunner,
   projectId: DomainProjectId,
   apiPort: number,
@@ -560,7 +635,8 @@ async function functionalCheckProject(
   privateGateway?: string,
 ): Promise<void> {
   const dbContainer = projectContainerName(asProjectId(projectId), "db");
-  const databaseCheck = await runner.run({
+  await waitForFunctionalCheck("Database roles and schemas", async () => {
+    const databaseCheck = await runner.run({
     executable: "docker",
     args: [
       "exec", dbContainer, "psql", "-U", "postgres", "-d", "postgres", "-tAc",
@@ -568,9 +644,8 @@ async function functionalCheckProject(
     ],
     timeoutMs: 30_000,
   });
-  if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") {
-    throw new Error("required Supabase database roles or schemas are missing after the update");
-  }
+    if (databaseCheck.exitCode !== 0 || databaseCheck.stdout.trim() !== "t") throw new Error("required Supabase database roles or schemas are missing");
+  });
   if (privateGateway) {
     const helper = `sm_health_${randomUUID().replaceAll("-", "")}`;
     try {
@@ -894,6 +969,9 @@ export async function runUpdateJob(jobId: JobId): Promise<void> {
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Unknown project update failure";
     let message = boundedDiagnosticText(sanitizeText(raw, secrets));
+    try {
+      await captureDeploymentDiagnostics(runner, project.id, deploymentContainers(project.id, project.stackRelease), error, secrets, (details) => repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: "error", message: `Container diagnostics: ${details.container}`, details: { ...details } }));
+    } catch { /* Preserve the original error and continue coordinated recovery. */ }
     if (recovery && recovery.phase !== "committed") {
       try {
         await restore();
