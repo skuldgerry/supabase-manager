@@ -1,6 +1,6 @@
 {
   "name": "supabase-manager",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "A self-hosted control plane for isolated official Supabase deployments.",
   "repository": {

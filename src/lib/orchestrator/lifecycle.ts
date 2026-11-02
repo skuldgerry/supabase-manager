@@ -9,12 +9,15 @@ import { decryptJson, getMasterKey, type EncryptedEnvelope } from '@/lib/securit
 import { DirectCommandRunner } from './command-runner'
 import { boundedDiagnosticText, sanitizeText } from './diagnostics'
 import { DockerCliHostDriver } from './docker-driver'
+import { deploymentContainers, functionalCheckProject } from './broker'
+import { waitForContainers } from './readiness'
+import { loadProjectCredentials } from '@/lib/internal/project-view'
+import { captureDeploymentDiagnostics } from './deployment-diagnostics'
 
 const globalLifecycle = globalThis as typeof globalThis & {
   __supabaseManagerLifecycleJobs?: Map<string, Promise<void>>
 }
 const activeLifecycleJobs = (globalLifecycle.__supabaseManagerLifecycleJobs ??= new Map())
-const PROJECT_LABEL = 'com.supabase-manager.project-id'
 
 async function exists(filePath: string): Promise<boolean> {
   return access(filePath).then(
@@ -34,41 +37,6 @@ async function projectEnvironment(projectId: ProjectId): Promise<string> {
     ciphertext: stored.ciphertextBase64,
   }
   return decryptJson<string>(envelope, await getMasterKey(), stored.associatedData)
-}
-
-async function waitForProjectContainers(
-  driver: DockerCliHostDriver,
-  projectId: ProjectId,
-  timeoutMs = 6 * 60_000
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  let last = 'No project containers were found'
-  while (Date.now() < deadline) {
-    const containers = await driver.listContainers({ [PROJECT_LABEL]: projectId })
-    if (containers.length > 0) {
-      const failed = containers.find(
-        (container) =>
-          container.state === 'dead' ||
-          container.state === 'exited' ||
-          container.health === 'unhealthy'
-      )
-      if (failed) throw new Error(`Container ${failed.name} reported ${failed.health ?? failed.state}`)
-      if (
-        containers.every(
-          (container) =>
-            container.state === 'running' &&
-            (container.health === 'healthy' || container.health === 'none')
-        )
-      ) {
-        return
-      }
-      last = containers
-        .map((container) => `${container.name}=${container.health ?? container.state}`)
-        .join(', ')
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000))
-  }
-  throw new Error(`Project services did not become ready: ${last}`)
 }
 
 export async function runLifecycleJob(jobId: JobId): Promise<void> {
@@ -98,7 +66,9 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
   const composePath = path.join(projectDir, 'docker-compose.yml')
   const overridePath = path.join(projectDir, 'manager.override.yml')
   const envPath = path.join(projectDir, `.env.lifecycle-${job.id}`)
-  const driver = new DockerCliHostDriver(new DirectCommandRunner())
+  const runner = new DirectCommandRunner()
+  const driver = new DockerCliHostDriver(runner)
+  let secrets: string[] = []
   const stage = (message: string) => {
     repository.updateJobState(job.id, {
       status: 'running',
@@ -116,7 +86,9 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
     if (!(await exists(composePath)) || !(await exists(overridePath))) {
       throw new Error('Manager-owned Compose configuration is unavailable')
     }
-    await writeFile(envPath, await projectEnvironment(project.id), { mode: 0o600 })
+    const environment = await projectEnvironment(project.id)
+    secrets = environment.split(/\r?\n/).filter((line) => /^[A-Z0-9_]*(PASSWORD|SECRET|TOKEN|KEY|JWT)/.test(line)).map((line) => line.slice(line.indexOf('=') + 1))
+    await writeFile(envPath, environment, { mode: 0o600 })
     const compose = {
       files: [composePath, overridePath, ...(await exists(path.join(projectDir, 'manager.images.yml')) ? [path.join(projectDir, 'manager.images.yml')] : [])],
       envFile: envPath,
@@ -142,7 +114,10 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
       ...compose,
       args: job.type === 'start-project' ? ['up', '--detach'] : ['restart'],
     })
-    await waitForProjectContainers(driver, project.id)
+    await waitForContainers(runner, deploymentContainers(project.id, project.stackRelease), { onProgress: (message) => repository.appendJobEvent({ jobId: job.id, stage: 'starting-services', level: 'info', message }) })
+    const credentials = await loadProjectCredentials(project.id)
+    if (!credentials) throw new Error('Saved project credentials are unavailable')
+    await functionalCheckProject(runner, project.id, project.ports.api, credentials)
     repository.updateProjectStatus(project.id, 'ready')
     repository.updateJobState(job.id, { status: 'succeeded', stage: 'ready' })
     repository.appendJobEvent({
@@ -153,7 +128,7 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
     })
   } catch (error) {
     const message = boundedDiagnosticText(
-      sanitizeText(error instanceof Error ? error.message : 'Project lifecycle action failed')
+      sanitizeText(error instanceof Error ? error.message : 'Project lifecycle action failed', secrets)
     )
     repository.updateJobState(job.id, {
       status: 'failed',
@@ -166,6 +141,9 @@ export async function runLifecycleJob(jobId: JobId): Promise<void> {
       level: 'error',
       message,
     })
+    try {
+      await captureDeploymentDiagnostics(runner, project.id, deploymentContainers(project.id, project.stackRelease), error, secrets, (details) => repository.appendJobEvent({ jobId: job.id, stage: repository.getJob(job.id)?.stage, level: 'error', message: `Container diagnostics: ${details.container}`, details: { ...details } }))
+    } catch { /* The original lifecycle error remains authoritative. */ }
   } finally {
     await rm(envPath, { force: true }).catch(() => undefined)
   }

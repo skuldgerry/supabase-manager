@@ -524,13 +524,37 @@ export class ControlPlaneRepository {
   public queueProjectDeletion(projectId: ProjectId, requestedBy: UserId): DurableJob {
     return this.db.transaction(() => {
       const project = this.getProject(projectId);
-      if (!project) throw new Error("project not found");
+      if (!project || project.deletedAt) throw new Error("project not found");
       this.requireManager(project.organizationId, requestedBy);
-      if (project.status === "deleting") throw new Error("project deletion is already queued");
-      if (this.listRunnableJobs().some((job) => job.projectId === projectId)) throw new Error("Wait for the current project operation to finish before deleting it");
+      const active = this.listRunnableJobs().find((job) => job.projectId === projectId);
+      if (active?.type === "delete-project") return active;
+      if (active) throw new Error("Wait for the current project operation to finish before deleting it");
       this.updateProjectStatus(projectId, "deleting");
       const job = this.createJob({ type: "delete-project", projectId, requestedBy, maxAttempts: 1 });
       this.appendJobEvent({ jobId: job.id, stage: "stopping-services", level: "info", message: "Project deletion accepted" });
+      return job;
+    })();
+  }
+
+  public latestProjectJob(projectId: ProjectId): DurableJob | null {
+    const row = this.db.prepare("SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as JobRow | undefined;
+    return row ? mapJob(row) : null;
+  }
+
+  public queueDeploymentRecovery(projectId: ProjectId, requestedBy: UserId, mode: "verify" | "resume"): DurableJob {
+    return this.db.transaction(() => {
+      const project = this.getProject(projectId);
+      if (!project || project.deletedAt) throw new Error("Project not found");
+      this.requireManager(project.organizationId, requestedBy);
+      if (project.ownership !== "manager-owned" || project.readyAt) throw new Error("Only a failed initial manager-owned deployment can be recovered here");
+      const active = this.listRunnableJobs().find((job) => job.projectId === projectId);
+      if (active?.type === "check-project") return active;
+      if (active) throw new Error("Wait for the current project operation to finish");
+      const previous = this.latestProjectJob(projectId);
+      if (project.status !== "failed" || previous?.status !== "failed" || !["create-project", "check-project"].includes(previous.type)) throw new Error("There is no failed deployment to recover");
+      const job = this.createJob({ type: "check-project", projectId, requestedBy, maxAttempts: 1 });
+      this.appendJobEvent({ jobId: job.id, stage: "validating", level: "info", message: mode === "verify" ? "Deployment recheck requested; existing services and data will not be changed" : "Deployment resume requested; existing credentials and volumes will be reused", details: { mode, sourceJobId: previous.id } });
+      this.updateProjectStatus(projectId, "provisioning");
       return job;
     })();
   }

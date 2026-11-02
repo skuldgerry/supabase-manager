@@ -1,24 +1,26 @@
-## Supabase Manager v1.0.1
+## Supabase Manager v1.0.2
 
-### Storage routing
+### More resilient deployments
 
-- Route Studio Storage operations through the selected project's private broker connection rather than process-wide credentials.
-- Preserve signed/public object URLs using the project's public endpoint.
-- Verify project organization access, including older installations whose Studio membership mirror is missing. Read-only and project-scoped restrictions remain enforced.
+- Follow actual container health and database, Auth, REST, and Storage checks, with retries for temporary startup failures.
+- Stop failed new deployments while preserving their data, credentials, configuration, and port reservations.
+- Recheck recovered services without changing them, resume a retained deployment, or explicitly delete it with project-name confirmation.
+- Preserve recovery progress across broker restarts and report when automatic stopping cannot be confirmed.
 
-### Managed updates and recovery
+### Clearer failure diagnostics
 
-- Retain cold snapshots of all managed project volumes, including PostgreSQL and file-backed Storage, with integrity checks, configuration, and pinned images.
-- Validate candidate services privately before reopening client ports, with durable progress, interrupted-job recovery, and retry diagnostics.
-- Refuse automatic updates with unsupported recovery requirements, including PostgreSQL major changes and external S3 Storage. Imported/manual deployments remain operator-managed.
-- No new persistent project services or modifications to the official Supabase images.
+- Expand container entries in **Live diagnostics** to see healthcheck output and recent logs captured at failure.
+- Copy the exact Docker log command for further inspection on the server.
+- Redact known credentials and limit captured output to keep the progress page readable.
 
-See [Updating projects](https://github.com/skuldgerry/supabase-manager/blob/v1.0.1/docs/updating.md) for downtime, independent backup requirements, retention, and recovery limitations.
+The official Supabase images remain unchanged. Imported/manual deployments retain their original operator-managed lifecycle.
+
+See [Deployment and recovery](https://github.com/skuldgerry/supabase-manager/blob/v1.0.2/docs/deployment.md#health-and-diagnostics) and the [changelog](https://github.com/skuldgerry/supabase-manager/blob/v1.0.2/CHANGELOG.md).
 
 ### Images
 
-- UI: `skuldgerry/supabase-manager:1.0.1` (also `latest`).
-- Broker: `skuldgerry/supabase-manager:1.0.1-broker` (also `latest-broker`).
+- UI: `skuldgerry/supabase-manager:1.0.2` (also `latest`).
+- Broker: `skuldgerry/supabase-manager:1.0.2-broker` (also `latest-broker`).
 
 ### Before updating
 

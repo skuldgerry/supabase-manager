@@ -60,6 +60,38 @@ record does not remove, stop, or reconfigure the original Compose deployment.
 
 ## Health and diagnostics
 
+New deployments wait for each required container to be running and healthy,
+then check database roles/schemas and real Auth, REST and Storage responses.
+Temporary `unhealthy`, restart and connection-refused results are retried;
+bounded deadlines still prevent a genuinely broken deployment waiting forever.
+
+If an initial deployment fails, the broker captures bounded, credential-redacted
+container and healthcheck logs before attempting to stop that project's services.
+This is a non-destructive rollback: containers, volumes, configuration, credentials
+and port reservations are retained. The UI explicitly reports if stopping could
+not be confirmed. Imported projects are never included in this workflow.
+
+On the failed deployment page:
+
+- **Recheck deployment** runs real readiness and functional checks without starting,
+  recreating or stopping services. Use it when services recovered after a failed job.
+- **Resume deployment** starts the retained configuration with its original
+  credentials, cached images and data, then validates it. It never initializes or
+  reseeds database volumes. Missing configuration/images must be resolved first.
+- **Delete failed deployment** permanently removes the project's resources and
+  data, only after project-name confirmation. Back up anything needed first.
+- **Reload page** only refreshes the display; it does not rerun service checks.
+
+Expand a container entry in **Live diagnostics** for its failure-time snapshot and
+copyable `docker logs` command. Snapshots are limited to four project containers,
+the last 100 log lines (up to 6,000 characters each), and recent healthcheck output.
+They are visible only to authorized organization owners/administrators and may
+still contain application data. Older failures have no retroactive snapshots;
+a new recheck/resume can capture the current failure if it persists.
+
+Updates of previously active projects retain their separate coordinated
+snapshot/restore workflow; initial-deployment recovery does not perform upgrades.
+
 For manager-owned stack upgrades and coordinated recovery, see
 [Updating projects](updating.md). Imported projects retain their original
 operator-managed update workflow.

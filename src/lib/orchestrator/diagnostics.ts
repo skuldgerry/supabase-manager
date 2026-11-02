@@ -6,13 +6,16 @@ const SECRET_PATTERNS = [
 ];
 
 export function sanitizeText(input: string, extraSecrets: readonly string[] = []): string {
-  let output = input;
-  for (const secret of [...extraSecrets].filter((value) => value.length >= 4).sort((a, b) => b.length - a.length)) {
+  let output = input.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  const variants = extraSecrets.filter((value) => value.length >= 4).flatMap((value) => [value, encodeURIComponent(value), Buffer.from(value).toString("base64"), Buffer.from(value).toString("base64url")]);
+  for (const secret of [...new Set(variants)].sort((a, b) => b.length - a.length)) {
     output = output.split(secret).join("[REDACTED]");
   }
   for (const pattern of SECRET_PATTERNS) output = output.replace(pattern, "[REDACTED]");
   // Common dotenv/CLI output: keep the key name but not the value.
   output = output.replace(/(^|[\s,{])([A-Z][A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|KEY)[A-Z0-9_]*)\s*[:=]\s*([^\s,}]+)/gim, "$1$2=[REDACTED]");
+  output = output.replace(/("[^"\r\n]*(?:password|secret|token|api[_-]?key|service[_-]?role|anon[_-]?key|authorization)[^"\r\n]*"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"[REDACTED]"');
+  output = output.replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]");
   return output;
 }
 

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, cn } from 'ui'
 
 import { ScaffoldContainer, ScaffoldSection } from '@/components/layouts/Scaffold'
+import { TextConfirmModal } from '@/components/ui/TextConfirmModalWrapper'
+import { DeploymentDiagnosticEvent, type DeploymentEvent } from './DeploymentDiagnosticEvent'
 
 type JobView = {
   project: { name: string; status: string }
@@ -14,7 +16,8 @@ type JobView = {
     stage: string | null
     errorMessage: string | null
   }
-  events?: Array<{ sequence: number; stage?: string | null; level: string; message: string; createdAt: string }>
+  events?: DeploymentEvent[]
+  recovery?: { canRecheck: boolean; canResume: boolean; canDelete: boolean }
 }
 
 const CREATION_STAGES = [
@@ -28,6 +31,14 @@ const CREATION_STAGES = [
   ['starting-services', 'Starting Supabase services'],
   ['functional-checks', 'Running functional checks'],
   ['ready', 'Project ready'],
+] as const
+
+const RECOVERY_STAGES = [
+  ['validating', 'Loading saved deployment'],
+  ['starting-database', 'Checking the existing database'],
+  ['starting-services', 'Checking required containers'],
+  ['functional-checks', 'Verifying database, Auth, REST and Storage'],
+  ['ready', 'Deployment recovered'],
 ] as const
 
 const DELETION_STAGES = [
@@ -63,6 +74,40 @@ export function BrokerDeploymentProgress({
   const [view, setView] = useState<JobView | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [recovering, setRecovering] = useState(false)
+  const [pendingAction, setPendingAction] = useState<'verify' | 'resume' | 'delete' | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const recoverDeployment = async (mode: 'verify' | 'resume') => {
+    setPendingAction(mode)
+    setRequestError(null)
+    try {
+      const response = await fetch(`/api/platform/projects/${encodeURIComponent(projectRef)}/recovery`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body?.error?.message ?? 'Deployment recovery could not be queued')
+      setView(body)
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : 'Deployment recovery could not be queued')
+    } finally { setPendingAction(null) }
+  }
+
+  const deleteDeployment = async () => {
+    setPendingAction('delete')
+    setRequestError(null)
+    try {
+      const response = await fetch(`/api/platform/projects/${encodeURIComponent(projectRef)}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmName: projectName }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body?.error?.message ?? 'Deletion could not be queued')
+      setConfirmDelete(false)
+      // The existing poll reads the new deletion job from the shared project record.
+      setView((previous) => previous ? { ...previous, job: { id: body.jobId, type: 'delete-project', status: 'queued', stage: 'stopping-services', errorMessage: null } } : previous)
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : 'Deletion could not be queued')
+    } finally { setPendingAction(null) }
+  }
 
   const retryRecovery = async () => {
     setRecovering(true)
@@ -116,11 +161,14 @@ export function BrokerDeploymentProgress({
     ? DELETION_STAGES
     : view?.job?.type === 'update-project'
       ? UPDATE_STAGES
-      : CREATION_STAGES
-  const currentIndex = Math.max(0, stages.findIndex(([id]) => id === view?.job?.stage))
+      : view?.job?.type === 'check-project' ? RECOVERY_STAGES : CREATION_STAGES
+  const events = useMemo(() => [...(view?.events ?? [])].sort((a, b) => a.sequence - b.sequence), [view?.events])
+  const progressStage = view?.job?.stage === 'rolling-back' && view.job.type !== 'update-project'
+    ? [...events].reverse().find((event) => event.level === 'error' && event.stage !== 'rolling-back')?.stage
+    : view?.job?.stage
+  const currentIndex = Math.max(0, stages.findIndex(([id]) => id === progressStage))
   const failed = view?.job?.status === 'failed'
   const percent = failed ? Math.max(8, Math.round((currentIndex / stages.length) * 100)) : Math.round(((currentIndex + 1) / stages.length) * 100)
-  const events = useMemo(() => [...(view?.events ?? [])].sort((a, b) => a.sequence - b.sequence), [view?.events])
 
   return (
     <ScaffoldContainer size="large">
@@ -134,7 +182,7 @@ export function BrokerDeploymentProgress({
                   ? `Deleting ${projectName}`
                   : view?.job?.type === 'update-project'
                     ? `Updating ${projectName}`
-                    : `Deploying ${projectName}`}
+                    : view?.job?.type === 'check-project' ? `Checking ${projectName}` : `Deploying ${projectName}`}
               </h1>
               <p className="mt-1 text-sm text-foreground-light">This job runs in the broker and survives page reloads and manager restarts.</p>
             </div>
@@ -161,7 +209,7 @@ export function BrokerDeploymentProgress({
                 const current = index === currentIndex && view?.job?.status !== 'succeeded'
                 return (
                   <div key={id} className="flex items-center gap-3 px-4 py-3">
-                    {complete ? <Check size={17} className="text-brand" /> : current ? <Loader2 size={17} className={cn('animate-spin', failed ? 'text-destructive' : 'text-warning')} /> : <Circle size={17} className="text-foreground-muted" />}
+                    {complete ? <Check size={17} className="text-brand" /> : current ? (failed ? <AlertTriangle size={17} className="text-destructive" /> : <Loader2 size={17} className="animate-spin text-warning" />) : <Circle size={17} className="text-foreground-muted" />}
                     <span className={cn('text-sm', (complete || current) ? 'text-foreground' : 'text-foreground-muted')}>{label}</span>
                   </div>
                 )
@@ -171,16 +219,13 @@ export function BrokerDeploymentProgress({
             <Card className="min-h-72 overflow-hidden">
               <div className="border-b px-4 py-3">
                 <h2 className="text-sm font-medium">Live diagnostics</h2>
-                <p className="text-xs text-foreground-light">Sanitized broker events. Secrets are never written here.</p>
+                <p className="text-xs text-foreground-light">Progress and bounded failure snapshots. Expand a container event to view its logs.</p>
               </div>
               <div className="max-h-[430px] overflow-y-auto bg-alternative px-4 py-3 font-mono text-xs">
                 {events.length === 0 ? (
                   <div className="flex items-center gap-2 text-foreground-light"><Loader2 size={13} className="animate-spin" />Waiting for the broker…</div>
                 ) : events.map((event) => (
-                  <div key={event.sequence} className={cn('grid grid-cols-[76px_1fr] gap-3 py-1.5', event.level === 'error' && 'text-destructive')}>
-                    <span className="text-foreground-muted">{new Date(event.createdAt).toLocaleTimeString()}</span>
-                    <span>{event.message}</span>
-                  </div>
+                  <DeploymentDiagnosticEvent key={`${view?.job?.id}-${event.sequence}`} event={event} />
                 ))}
               </div>
             </Card>
@@ -189,7 +234,23 @@ export function BrokerDeploymentProgress({
           {failed && view?.job?.type === 'update-project' && view.project.status !== 'ready' && (
             <Button type="default" loading={recovering} onClick={() => void retryRecovery()}>Retry recovery</Button>
           )}
-          {failed && <Button type="default" onClick={() => router.reload()}>Refresh status</Button>}
+          {failed && (view?.job?.type === 'create-project' || view?.job?.type === 'check-project') && (
+            <Card className="space-y-4 p-4 text-sm">
+              <h2 className="font-medium">Recover this deployment</h2>
+              <p className="text-foreground-light">A failed job does not necessarily mean the containers are down. Recheck runs actual container, database and API checks without changing services. Resume starts retained services using the same credentials and data.</p>
+              <p className="text-foreground-light">After a failed new deployment or resume, the broker attempts to stop only this project's services. Volumes and credentials are retained. A read-only recheck never stops services. Expand the diagnostics above if automatic stopping could not be confirmed.</p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="default" disabled={!view.recovery?.canRecheck || pendingAction !== null} loading={pendingAction === 'verify'} onClick={() => void recoverDeployment('verify')}>Recheck deployment</Button>
+                <Button type="primary" disabled={!view.recovery?.canResume || pendingAction !== null} loading={pendingAction === 'resume'} onClick={() => void recoverDeployment('resume')}>Resume deployment</Button>
+                {view.recovery?.canDelete && <Button type="danger" disabled={pendingAction !== null} onClick={() => setConfirmDelete(true)}>Delete failed deployment</Button>}
+              </div>
+              {!view.recovery?.canResume && <p className="text-foreground-light">Saved configuration may be incomplete. Inspect the failure details before explicitly deleting and recreating this project.</p>}
+              <p className="text-foreground-light">Deletion permanently removes this project's containers, volumes, credentials and data. Back up anything you need first.</p>
+            </Card>
+          )}
+          {failed && view?.job?.type === 'delete-project' && <Button type="danger" disabled={pendingAction !== null} onClick={() => setConfirmDelete(true)}>Retry project deletion</Button>}
+          {failed && <Button type="default" onClick={() => router.reload()}>Reload page (does not recheck services)</Button>}
+          <TextConfirmModal visible={confirmDelete} loading={pendingAction === 'delete'} size="small" title={`Delete ${projectName}?`} variant="destructive" alert={{ title: 'This permanently deletes the project and its data.', description: 'All project containers, volumes and credentials will be removed. This cannot be undone.' }} confirmString={projectName} confirmPlaceholder="Type the project name" confirmLabel="Delete project and data" onConfirm={() => void deleteDeployment()} onCancel={() => { if (pendingAction !== 'delete') setConfirmDelete(false) }} />
         </div>
       </ScaffoldSection>
     </ScaffoldContainer>
