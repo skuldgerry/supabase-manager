@@ -7,10 +7,18 @@ import {
   startPBMigration,
   type PBMigDirection,
 } from '@/lib/api/self-hosted/pocketbaseMigrationRunner'
+import { STUDIO_AUTH_MANAGER } from '@/lib/constants'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (STUDIO_AUTH_MANAGER) {
+    return res.status(404).json({
+      data: null,
+      error: { message: 'PocketBase migration is unavailable in Manager mode' },
+    })
+  }
+
   const ref = req.query.ref as string
   const supaProject = getStoredProjectByRef(ref)
 

@@ -5,6 +5,10 @@ export default defineConfig({
   resolve: { alias: { '@': resolve(__dirname, '.') } },
   test: {
     environment: 'node',
-    include: ['tests/unit/edge-function-test-handler.test.ts', 'lib/api/edgeFunctions.test.ts'],
+    include: [
+      'tests/unit/edge-function-test-handler.test.ts',
+      'tests/unit/pocketbase-migrate-handler.test.ts',
+      'lib/api/edgeFunctions.test.ts',
+    ],
   },
 })

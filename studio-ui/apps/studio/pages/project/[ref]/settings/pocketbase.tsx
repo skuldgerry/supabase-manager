@@ -22,6 +22,7 @@ import { PocketBaseProjectPanel } from '@/components/interfaces/SelfHosted/Pocke
 import { PocketBaseMigratePanel } from '@/components/interfaces/SelfHosted/PocketBaseMigratePanel'
 import DefaultLayout from '@/components/layouts/DefaultLayout'
 import SettingsLayout from '@/components/layouts/ProjectSettingsLayout/SettingsLayout'
+import { STUDIO_AUTH_MANAGER } from '@/lib/constants'
 import type { NextPageWithLayout } from '@/types'
 
 interface PBProject {
@@ -55,7 +56,9 @@ const PocketBaseSettingsPage: NextPageWithLayout = () => {
           <PageHeaderSummary>
             <PageHeaderTitle>PocketBase</PageHeaderTitle>
             <PageHeaderDescription>
-              Admin credentials, API URL, and data migration tools
+              {STUDIO_AUTH_MANAGER
+                ? 'Admin credentials and API URL'
+                : 'Admin credentials, API URL, and data migration tools'}
             </PageHeaderDescription>
           </PageHeaderSummary>
         </PageHeaderMeta>
@@ -88,20 +91,22 @@ const PocketBaseSettingsPage: NextPageWithLayout = () => {
           </PageSectionContent>
         </PageSection>
 
-        <PageSection>
-          <PageSectionMeta>
-            <PageSectionSummary>
-              <PageSectionTitle>Data Migration</PageSectionTitle>
-              <PageSectionDescription>
-                Move data between this PocketBase instance and a Supabase project. Requires a
-                running Supabase project in the same Studio as the migration target/source.
-              </PageSectionDescription>
-            </PageSectionSummary>
-          </PageSectionMeta>
-          <PageSectionContent>
-            <PocketBaseMigratePanel supaRef={ref} />
-          </PageSectionContent>
-        </PageSection>
+        {!STUDIO_AUTH_MANAGER && (
+          <PageSection>
+            <PageSectionMeta>
+              <PageSectionSummary>
+                <PageSectionTitle>Data Migration</PageSectionTitle>
+                <PageSectionDescription>
+                  Move data between this PocketBase instance and a Supabase project. Requires a
+                  running Supabase project in the same Studio as the migration target/source.
+                </PageSectionDescription>
+              </PageSectionSummary>
+            </PageSectionMeta>
+            <PageSectionContent>
+              <PocketBaseMigratePanel supaRef={ref} />
+            </PageSectionContent>
+          </PageSection>
+        )}
       </PageContainer>
     </>
   )
