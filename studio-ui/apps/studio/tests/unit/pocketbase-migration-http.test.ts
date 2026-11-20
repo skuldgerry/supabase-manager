@@ -17,7 +17,7 @@ vi.mock('@/lib/api/self-hosted/pgMetaProxy', () => ({ getPgMetaProxyConfig: () =
 vi.mock('@/lib/api/self-hosted/util', () => ({ encryptString: () => { throw new Error('Manager migrations must not encrypt local connection strings') } }))
 
 const token = 'fixture-private-token-0123456789abcdef0123456789abcdef'
-const pbPassword = 'fixture-pocketbase-password'
+let pbPassword = 'fixture-pocketbase-password'
 const servers: Server[] = []
 let dataDir = ''
 let allowed = true
@@ -67,6 +67,7 @@ async function finish(id: string) {
 
 describe('isolated HTTP migration workflow', () => {
   beforeEach(async () => {
+    pbPassword = 'fixture-pocketbase-password'
     vi.resetModules()
     allowed = true; redirectAuth = false; leakedRequests = 0
     inserts = []; queries = []; pbWrites = []; received = []
@@ -183,6 +184,17 @@ describe('isolated HTTP migration workflow', () => {
     allowed = false
     expect((await request('POST')).code).toBe(403)
     expect(received.some((path) => path.startsWith('pb '))).toBe(false)
+  })
+
+  it('redacts short credentials echoed by a failing endpoint', async () => {
+    pbPassword = 'a!1'
+    state.projects[1].pocketbase_admin_password = pbPassword
+    redirectAuth = true
+    const started = await request('POST')
+    const job = await finish(started.payload.job_id)
+    expect(job.status).toBe('error')
+    expect(job.logs.join('\n')).not.toContain(pbPassword)
+    expect(job.logs.join('\n')).toContain('[REDACTED]')
   })
 
   it('does not read or mutate another project\'s saved task through an authorized project URL', async () => {

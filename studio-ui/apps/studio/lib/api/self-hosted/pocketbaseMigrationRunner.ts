@@ -97,8 +97,9 @@ function jobMetadata(job: PBMigrationJob): PersistedMeta {
 
 function logJob(job: PBMigrationJob, message: string) {
   const secrets = [job.pbAdminPassword, job.supaServiceKey, ...(runtime.get(job.id)?.secrets ?? [])]
-    .filter((value): value is string => typeof value === 'string' && value.length > 3)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
     .flatMap((value) => { const raw = value.replace(/^Bearer\s+/i, ''); return [value, raw, encodeURIComponent(raw), Buffer.from(raw).toString('base64')] })
+    .filter((value) => value.length > 0)
     .sort((a, b) => b.length - a.length)
   let clean = message.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
   for (const secret of secrets) clean = clean.split(secret).join('[REDACTED]')
