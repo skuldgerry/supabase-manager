@@ -1,6 +1,6 @@
 {
   "name": "supabase-manager",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "A self-hosted control plane for isolated official Supabase deployments.",
   "repository": {
@@ -22,10 +22,10 @@
   "dependencies": {
     "@node-rs/argon2": "2.1.0",
     "better-sqlite3": "13.0.3",
-    "next": "16.4.5",
+    "next": "16.4.6",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@supabase/supabase-js": "2.103.0",
@@ -34,11 +34,14 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.6",
     "tsx": "^4.21.0",
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
+    "js-yaml@4.x": "4.3.2",
+    "brace-expansion@1.x": "1.1.21"
   }
 }
