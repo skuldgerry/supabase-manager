@@ -54,11 +54,7 @@ export async function POST(
 
   const existing = repository
     .listRunnableJobs()
-    .find(
-      (job) =>
-        job.projectId === project.id &&
-        ['start-project', 'stop-project', 'restart-project'].includes(job.type)
-    )
+    .find((job) => job.projectId === project.id)
   if (existing) {
     return Response.json(await internalProjectView(project, existing), { status: 202 })
   }

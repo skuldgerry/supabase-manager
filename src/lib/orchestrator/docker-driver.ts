@@ -23,7 +23,9 @@ export class DockerCliHostDriver implements HostDriver {
     const result = await this.docker(["ps", "-a", ...labelsArgs(labels), "--format", "{{json .}}"]);
     return lines(result).map((row) => {
       const item = row as Record<string, string>;
-      return { id: item.ID, name: item.Names, state: item.State as HostContainer["state"], health: item.Status?.toLowerCase().includes("healthy") ? "healthy" : "none", labels: {} };
+      const status = item.Status?.toLowerCase() ?? "";
+      const health: HostContainer["health"] = status.includes("unhealthy") ? "unhealthy" : status.includes("health: starting") ? "starting" : status.includes("healthy") ? "healthy" : "none";
+      return { id: item.ID, name: item.Names, state: item.State as HostContainer["state"], health, labels: {} };
     });
   }
 

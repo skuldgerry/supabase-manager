@@ -40,21 +40,30 @@ export function ManagerProjectLifecycle() {
   const [targetRelease, setTargetRelease] = useState('')
   const [confirmingUpdate, setConfirmingUpdate] = useState(false)
   const [updating, setUpdating] = useState(false)
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+  const projectRef = project?.ref
+  const externallyOwned = (project as typeof project & { ownership?: string })?.ownership === 'external'
 
   useEffect(() => {
+    const controller = new AbortController()
     setUpdateOptions(null)
     setTargetRelease('')
-    if (!project?.ref || (project as typeof project & { ownership?: string }).ownership === 'external') return
-    void fetch(`/api/platform/projects/${encodeURIComponent(project.ref)}/update`, { cache: 'no-store' })
+    setCatalogError(null)
+    if (!projectRef || externallyOwned) return
+    void fetch(`/api/platform/projects/${encodeURIComponent(projectRef)}/update`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const body = await response.json()
         if (!response.ok) throw new Error(body?.error?.message ?? 'Release catalog is unavailable')
+        if (controller.signal.aborted) return
         setUpdateOptions(body)
         const first = body.releases.find((release: string) => isNewerRelease(release, body.currentRelease)) ?? ''
         setTargetRelease(first)
       })
-      .catch((error) => toast.error(error instanceof Error ? error.message : 'Release catalog is unavailable'))
-  }, [project?.ref])
+      .catch((error) => {
+        if (!controller.signal.aborted) setCatalogError(error instanceof Error ? error.message : 'Release catalog is unavailable')
+      })
+    return () => controller.abort()
+  }, [projectRef, externallyOwned])
 
   const newerReleases = useMemo(
     () => updateOptions?.releases.filter((release) => isNewerRelease(release, updateOptions.currentRelease)) ?? [],
@@ -63,7 +72,7 @@ export function ManagerProjectLifecycle() {
 
   if (!project) return null
 
-  if ((project as typeof project & { ownership?: string }).ownership === 'external') {
+  if (externallyOwned) {
     return (
       <Card>
         <CardContent>
@@ -192,20 +201,21 @@ export function ManagerProjectLifecycle() {
             <div>
               <p className="text-sm">Official stack release</p>
               <p className="max-w-[520px] text-sm text-foreground-light">
-                {updateOptions
-                  ? `Current release: ${updateOptions.currentRelease}. Updates create a database backup, retain project volumes and credentials, and run functional checks.`
-                  : 'Loading the official self-hosted release catalog…'}
+                {catalogError ?? (updateOptions
+                  ? `Current release: ${updateOptions.currentRelease}. Updates pause client access, back up PostgreSQL and Storage together, and verify the new release before reopening access.`
+                  : 'Loading the official self-hosted release catalog…')}
               </p>
             </div>
             <div className="flex min-w-64 items-center gap-2">
               <select
                 className="h-9 min-w-44 rounded-md border bg-surface-100 px-3 text-sm"
+                aria-label="Target official stack release"
                 value={targetRelease}
                 disabled={isStopped || updating || newerReleases.length === 0}
                 onChange={(event) => setTargetRelease(event.target.value)}
               >
                 {newerReleases.length === 0 ? (
-                  <option value="">Up to date</option>
+                  <option value="">{catalogError ? 'Catalog unavailable' : updateOptions ? 'Up to date' : 'Loading releases…'}</option>
                 ) : (
                   newerReleases.map((release) => <option key={release} value={release}>{release}</option>)
                 )}
@@ -252,7 +262,7 @@ export function ManagerProjectLifecycle() {
         onConfirm={() => void updateProject()}
       >
         <p className="text-sm text-foreground-light">
-          The manager will create a PostgreSQL logical backup, pull the images pinned by the selected official release, recreate the services, and run database, Auth, REST, and Storage checks. The previous Compose configuration is restored automatically if the checks fail. A PostgreSQL major-version change is refused and requires a dedicated migration.
+          The project will be unavailable while the manager snapshots its database, Storage files, and configuration. The new release is checked before client access reopens. If those checks fail, the original data and images are restored together. Recovery points are retained. PostgreSQL major upgrades and external S3 backends require an operator migration.
         </p>
       </ConfirmationModal>
     </>

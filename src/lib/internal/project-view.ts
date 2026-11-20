@@ -3,6 +3,9 @@ import { dockerProjectName } from "@/lib/domain";
 import { getRepository } from "@/lib/db/manager";
 import { decryptJson, getMasterKey, type EncryptedEnvelope } from "@/lib/security/encryption";
 import { encryptJson } from "@/lib/security/encryption";
+import { access } from "node:fs/promises";
+import path from "node:path";
+import { getConfig } from "@/lib/config";
 
 type ProjectCredentials = Record<string, string>;
 
@@ -49,6 +52,11 @@ export async function saveProjectAiSettings(projectId: ProjectId, settings: Proj
 }
 
 export async function internalProjectView(project: Project, job?: DurableJob | null) {
+  const failedDeployment = project.ownership === "manager-owned" && !project.readyAt && project.status === "failed"
+    && job?.status === "failed" && ["create-project", "check-project"].includes(job.type);
+  const projectDir = path.join(getConfig().dataDir, "projects", project.id);
+  const savedConfiguration = failedDeployment && Boolean(getRepository().getCredential(project.id, "project-environment"))
+    && await Promise.all(["docker-compose.yml", "manager.override.yml"].map((file) => access(path.join(projectDir, file)).then(() => true, () => false))).then((values) => values.every(Boolean));
   return {
     project: {
       ...project,
@@ -56,6 +64,7 @@ export async function internalProjectView(project: Project, job?: DurableJob | n
     },
     ...(job ? { job, events: getRepository().listJobEvents(job.id) } : {}),
     credentialsReady: Boolean(getRepository().getCredential(project.id, "project-credentials")),
+    recovery: { canRecheck: Boolean(failedDeployment && getRepository().getCredential(project.id, "project-credentials")), canResume: Boolean(savedConfiguration), canDelete: Boolean(failedDeployment) },
   };
 }
 
