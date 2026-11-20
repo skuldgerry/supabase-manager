@@ -5,7 +5,7 @@ packages:
   - e2e/*
 
 catalog:
-  '@sentry/nextjs': ^10.26.0
+  '@sentry/nextjs': 10.75.2
   '@supabase/auth-js': 2.103.0
   '@supabase/postgrest-js': 2.103.0
   '@supabase/realtime-js': 2.103.0
@@ -15,7 +15,7 @@ catalog:
   '@types/react-dom': ^18.3.0
   lodash: ^4.18.1
   lodash-es: ^4.18.1
-  next: ~16.3.8
+  next: 16.4.6
   react: ^18.3.0
   react-dom: ^18.3.0
   recharts: ^2.15.4
@@ -73,24 +73,26 @@ onlyBuiltDependencies:
 
 overrides:
   sharp: 0.35.5
+  'tar@7': 7.5.22
+  source-map-js: 1.2.2
   '@ardatan/relay-compiler>immutable': ^3.8.3
   fast-xml-parser: ^5.7.3
-  '@mapbox/node-pre-gyp>tar': ^7.5.11
+  '@mapbox/node-pre-gyp>tar': 7.5.22
   '@redocly/respect-core>form-data': ^4.0.4
   '@redocly/respect-core>js-yaml': ^4.1.1
   '@rollup/plugin-terser>serialize-javascript': ^7.0.5
   '@tanstack/start-server-core': ^1.159.0
-  cacache>tar: ^7.5.11
+  cacache>tar: 7.5.22
   dompurify: ^3.4.2
   esbuild: ^0.25.2
   lodash: 'catalog:'
   lodash-es: 'catalog:'
-  node-gyp>tar: ^7.5.11
+  node-gyp>tar: 7.5.22
   nodemailer: ^7.0.11
   payload>undici: ^7.18.2
   'pgsql-parser>libpg-query': ^15.2.0
   refractor>prismjs: ^1.30.0
-  supabase>tar: ^7.5.11
+  supabase>tar: 7.5.22
   'terser-webpack-plugin>serialize-javascript': ^7.0.5
   tmp: ^0.2.4
   webpack: ^5.104.1
@@ -100,11 +102,12 @@ overrides:
   express-rate-limit: ^8.5.1
   follow-redirects: ^1.16.0
   h3: '>=2.0.1-rc.17'
-  hono: ^4.12.18
+  hono: 4.13.19
   nitropack: ^2.13.4
   postcss: ^8.5.10
   protobufjs: ^7.5.6
-  simple-git: ^3.36.0
+  simple-git: 4.0.1
+  '@simple-git/argv-parser': 2.0.1
   socks-proxy-agent: ^8.0.5
   srvx: ^0.11.13
   unhead: ^2.1.13
