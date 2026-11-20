@@ -332,6 +332,16 @@ export function getManagerBrokerProxyConfig(projectId: string): {
   }
 }
 
+export function authorizeManagerBrokerMigration(projectId: string, actorEmail: string, targetOrganizationSlug?: string): Promise<Response> {
+  const { baseUrl, token } = configuration()
+  const query = new URLSearchParams({ actorEmail })
+  if (targetOrganizationSlug) query.set('targetOrganizationSlug', targetOrganizationSlug)
+  return fetch(`${baseUrl}/api/internal/v1/projects/${encodeURIComponent(projectId)}/migration-access?${query}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(15_000),
+  })
+}
+
 export function managerOrigin(headers: IncomingHttpHeaders): string {
   const forwardedProto = String(headers['x-forwarded-proto'] ?? 'http').split(',')[0].trim()
   const forwardedHost = String(headers['x-forwarded-host'] ?? headers.host ?? 'localhost').split(',')[0].trim()

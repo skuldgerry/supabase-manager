@@ -70,6 +70,13 @@ export const useGenerateSettingsMenu = () => {
                   url: `/project/${ref}/settings/database`,
                   items: [] as [],
                 },
+                {
+                  name: 'Data Migration',
+                  key: 'migration',
+                  url: `/project/${ref}/settings/pocketbase`,
+                  items: [] as [],
+                  disabled: !isProjectActive,
+                },
               ]),
         ],
       },

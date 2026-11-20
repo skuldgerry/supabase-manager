@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowLeftRight, CheckCircle2, Loader2, Terminal } from 'lucide-react'
 import {
@@ -25,6 +25,11 @@ interface MigJob {
   finishedAt?: string
 }
 
+interface MigrationOptions {
+  supabaseProjects: { ref: string; name: string }[]
+  targets: { id: string; name: string; url: string; projectRef?: string }[]
+}
+
 function statusVariant(s: JobStatus): 'default' | 'success' | 'destructive' {
   if (s === 'done') return 'success'
   if (s === 'error') return 'destructive'
@@ -40,19 +45,35 @@ function statusLabel(s: JobStatus): string {
 
 export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
   const [direction, setDirection] = useState<Direction>('pb-to-supa')
-  const [pbUrl, setPbUrl] = useState('')
+  const [targetId, setTargetId] = useState('')
+  const [supabaseRef, setSupabaseRef] = useState('')
   const [pbEmail, setPbEmail] = useState('')
   const [pbPassword, setPbPassword] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
+  const [jobProjectRef, setJobProjectRef] = useState('')
   const [step, setStep] = useState<'configure' | 'progress'>('configure')
   const logsRef = useRef<HTMLPreElement>(null)
 
-  const { data: job } = useQuery<MigJob>({
-    queryKey: ['pb-migrate-job', supaRef, jobId],
+  const { data: options, error: optionsError, isPending: loadingOptions } = useQuery<MigrationOptions>({
+    queryKey: ['pb-migration-options', supaRef],
     queryFn: async () => {
-      const res = await fetch(`/api/platform/projects/${supaRef}/pocketbase-migrate?job=${jobId}`)
-      if (!res.ok) throw new Error('Failed to poll job')
-      return res.json()
+      const response = await fetch(`/api/platform/projects/${encodeURIComponent(supaRef)}/pocketbase-migrate?options=1`)
+      const body = await response.json()
+      if (!response.ok) throw new Error(body?.error?.message ?? 'Migration options are unavailable')
+      return body
+    },
+    retry: false,
+  })
+  const selectedSupabase = supabaseRef || options?.supabaseProjects[0]?.ref || ''
+  const selectedTarget = options?.targets.find((target) => target.id === targetId) ?? options?.targets[0]
+
+  const { data: job, error: pollError } = useQuery<MigJob>({
+    queryKey: ['pb-migrate-job', jobProjectRef, jobId],
+    queryFn: async () => {
+      const res = await fetch(`/api/platform/projects/${encodeURIComponent(jobProjectRef)}/pocketbase-migrate?job=${encodeURIComponent(jobId!)}`)
+      const body = await res.json()
+      if (!res.ok) throw new Error(body?.error?.message ?? 'Migration progress is unavailable')
+      return body
     },
     enabled: !!jobId && step === 'progress',
     refetchInterval: (q) => {
@@ -61,21 +82,20 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
     },
   })
 
-  // Auto-scroll logs
-  if (logsRef.current) {
-    logsRef.current.scrollTop = logsRef.current.scrollHeight
-  }
+  useEffect(() => {
+    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight
+  }, [job?.logs.length])
 
   const { mutate: start, isPending: isStarting, error: startError } = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/platform/projects/${supaRef}/pocketbase-migrate`, {
+      const res = await fetch(`/api/platform/projects/${encodeURIComponent(selectedSupabase)}/pocketbase-migrate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           direction,
-          pb_url: pbUrl.trim(),
-          pb_admin_email: pbEmail.trim(),
-          pb_admin_password: pbPassword,
+          pb_target_id: selectedTarget?.id,
+          pb_admin_email: pbEmail.trim() || undefined,
+          pb_admin_password: pbPassword || undefined,
         }),
       })
       const body = await res.json()
@@ -84,6 +104,8 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
     },
     onSuccess: (data) => {
       setJobId(data.job_id)
+      setJobProjectRef(selectedSupabase)
+      setPbPassword('')
       setStep('progress')
     },
   })
@@ -93,7 +115,7 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
     setJobId(null)
   }
 
-  const canStart = pbUrl.trim().length > 0 && pbEmail.trim().length > 0 && pbPassword.length > 0
+  const canStart = !!selectedSupabase && !!selectedTarget && (!!selectedTarget.projectRef || (!!pbEmail.trim() && !!pbPassword)) && !optionsError
 
   if (step === 'configure') {
     return (
@@ -104,8 +126,9 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
           <AlertDescription_Shadcn_ className="flex flex-col gap-1">
             <p>
               Migrate collections and records between a PocketBase instance and this Supabase project.
-              Choose the direction, enter the PocketBase URL and admin credentials, then start.
+              Choose the direction and an authorized PocketBase endpoint, then start.
             </p>
+            <p className="text-foreground-muted">Authentication accounts, file contents, indexes and access policies require a separate migration. Failed migrations may leave partial changes.</p>
             <p className="text-foreground-muted">
               <strong>PocketBase → Supabase</strong>: creates tables in Postgres and bulk-inserts records.
               <br />
@@ -143,19 +166,26 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
           </div>
         </div>
 
+        {loadingOptions && <p className="text-sm text-foreground-light">Loading authorized migration endpoints…</p>}
+        {optionsError && <p role="alert" className="text-sm text-destructive">{optionsError.message}</p>}
         <div className="flex flex-col gap-1.5">
-          <Label_Shadcn_ htmlFor="pb-url">PocketBase URL</Label_Shadcn_>
-          <Input_Shadcn_
-            id="pb-url"
-            placeholder="http://localhost:8090"
-            value={pbUrl}
-            onChange={(e) => setPbUrl(e.target.value)}
-            className="font-mono text-xs"
-          />
+          <Label_Shadcn_ htmlFor="migration-supabase">Supabase project</Label_Shadcn_>
+          <select id="migration-supabase" className="rounded-md border bg-surface-100 p-2 text-sm" value={selectedSupabase} onChange={(event) => setSupabaseRef(event.target.value)}>
+            {options?.supabaseProjects.map((project) => <option key={project.ref} value={project.ref}>{project.name}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label_Shadcn_ htmlFor="pb-target">PocketBase endpoint</Label_Shadcn_>
+          <select id="pb-target" className="rounded-md border bg-surface-100 p-2 text-sm" value={selectedTarget?.id ?? ''} onChange={(event) => setTargetId(event.target.value)}>
+            <option value="" disabled>Choose an endpoint</option>
+            {options?.targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
+          </select>
+          {selectedTarget && <p className="break-all font-mono text-xs text-foreground-light">{selectedTarget.url}</p>}
+          {options && options.targets.length === 0 && <p className="text-sm text-foreground-light">No authorized PocketBase endpoint is available. Register a project or ask the administrator to configure a migration endpoint.</p>}
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label_Shadcn_ htmlFor="pb-email">Admin email</Label_Shadcn_>
+          <Label_Shadcn_ htmlFor="pb-email">Admin email{selectedTarget?.projectRef ? ' (optional when saved)' : ''}</Label_Shadcn_>
           <Input_Shadcn_
             id="pb-email"
             type="email"
@@ -166,7 +196,7 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label_Shadcn_ htmlFor="pb-password">Admin password</Label_Shadcn_>
+          <Label_Shadcn_ htmlFor="pb-password">Admin password{selectedTarget?.projectRef ? ' (optional when saved)' : ''}</Label_Shadcn_>
           <Input_Shadcn_
             id="pb-password"
             type="password"
@@ -230,6 +260,7 @@ export function PocketBaseMigratePanel({ supaRef }: { supaRef: string }) {
           </Badge>
         )}
       </div>
+      {pollError && <p role="alert" className="text-sm text-destructive">{pollError.message}</p>}
 
       <div className="rounded-md border border-strong bg-surface-100 overflow-hidden">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-strong bg-surface-200">

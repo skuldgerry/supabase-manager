@@ -8,6 +8,7 @@ export default defineConfig({
     include: [
       'tests/unit/edge-function-test-handler.test.ts',
       'tests/unit/pocketbase-migrate-handler.test.ts',
+      'tests/unit/pocketbase-migration-http.test.ts',
       'lib/api/edgeFunctions.test.ts',
     ],
   },
