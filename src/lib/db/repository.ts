@@ -175,7 +175,11 @@ function required(value: string, field: string): string {
 
 function email(value: string): string {
   const normalized = required(value, "email").toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(normalized)) throw new Error("email is invalid");
+  const at = normalized.indexOf("@", 1);
+  const dot = normalized.indexOf(".", at + 2);
+  if (/\s/.test(normalized) || at < 0 || dot < 0 || dot === normalized.length - 1) {
+    throw new Error("email is invalid");
+  }
   return normalized;
 }
 

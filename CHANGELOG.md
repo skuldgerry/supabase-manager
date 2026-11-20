@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 - 2026-11-20
+
+- Update the broker to Next.js 16.4.6 and refresh its validation and tooling dependencies.
+- Keep email validation responsive on long input.
+
 ## 1.0.2 - 2026-11-02
 
 ### Improved

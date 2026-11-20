@@ -19,6 +19,18 @@ test("first-admin creation is one-time and setup survives lookup", () => {
   closeDatabase(db);
 });
 
+test("email lookup rejects invalid input and normalizes an existing address", () => {
+  const { db, repository, admin } = fixture();
+  try {
+    assert.equal(repository.getUserByEmail(" Admin@Example.COM ")?.id, admin.id);
+    assert.throws(() => repository.getUserByEmail("admin@sub domain.example"), /email is invalid/);
+    assert.throws(() => repository.getUserByEmail("admin@domain."), /email is invalid/);
+    assert.throws(() => repository.getUserByEmail("admin" + "@".repeat(16_000)), /email is invalid/);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("initial bootstrap creates the admin, default organization, and owner membership atomically", () => {
   const db = openDatabase();
   const repository = new ControlPlaneRepository(db);
