@@ -50,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     await authorizeMigration(project, member)
     if (req.method === 'GET') {
       const jobId = req.query.job
-      if (typeof jobId !== 'string' || !/^[a-f0-9]{16}$/.test(jobId)) throw new MigrationAccessError(400, 'A valid migration job ID is required')
+      if (typeof jobId !== 'string' || jobId.length !== 16 || /[^a-f0-9]/.test(jobId)) throw new MigrationAccessError(400, 'A valid migration job ID is required')
       const job = getPBMigrationJob(jobId, project.ref)
       if (!job || job.supaRef !== ref) throw new MigrationAccessError(404, 'Migration job not found for this project')
       // Older metadata is supported only while its exact endpoint remains trusted.

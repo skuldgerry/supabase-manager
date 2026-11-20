@@ -39,7 +39,7 @@ async function serve(callback: (path: string, method: string, body: any, headers
       const result = callback(req.url!, req.method!, raw ? JSON.parse(raw) : undefined, req.headers)
       res.writeHead(result.code ?? 200, { 'Content-Type': 'application/json', ...(result.location ? { Location: result.location } : {}) })
       res.end(JSON.stringify(result.body ?? {}))
-    } catch (error) { res.writeHead(500); res.end(JSON.stringify({ message: String(error) })) }
+    } catch { res.writeHead(500); res.end(JSON.stringify({ message: 'Fixture request failed' })) }
   })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -194,5 +194,13 @@ describe('isolated HTTP migration workflow', () => {
     writeFileSync(file, JSON.stringify(metadata))
     expect((await request('GET', {}, { job: id })).code).toBe(404)
     expect(JSON.parse(readFileSync(file, 'utf8')).status).toBe('running')
+  })
+
+  it('rejects non-canonical task IDs at the runner file boundary', async () => {
+    const { getPBMigrationJob } = await import('../../lib/api/self-hosted/pocketbaseMigrationRunner')
+    for (const id of ['../1122334455667788', '..\\1122334455667788', '%2e%2e%2f1122334455667788', '1122334455667788\n', '1122334455667788\0']) {
+      expect(getPBMigrationJob(id, 'supa-one')).toBeUndefined()
+    }
+    expect(readdirSync(dataDir)).not.toContain('pb-migrations')
   })
 })

@@ -55,8 +55,13 @@ export type PBMigrationJobView = Omit<PBMigrationJob, 'pbAdminPassword' | 'supaS
 const DATA_DIR = process.env.STUDIO_DATA_DIR || path.join(/*turbopackIgnore: true*/ process.cwd(), '.studio-data')
 const MIG_DIR = path.join(DATA_DIR, 'pb-migrations')
 
-function metaPath(id: string) { return path.join(MIG_DIR, `${id}.json`) }
-function logPath(id: string)  { return path.join(MIG_DIR, `${id}.log`)  }
+function migrationPath(id: string, extension: 'json' | 'log'): string {
+  if (id.length !== 16 || /[^a-f0-9]/.test(id)) throw new Error('Invalid migration job ID')
+  return path.join(MIG_DIR, `${path.basename(id)}.${extension}`)
+}
+
+function metaPath(id: string) { return migrationPath(id, 'json') }
+function logPath(id: string)  { return migrationPath(id, 'log') }
 
 function saveMeta(job: PBMigrationJob): void {
   try {
@@ -123,7 +128,7 @@ function quoteIdentifier(name: string): string {
 }
 
 function loadJob(id: string, expectedSupaRef?: string): PBMigrationJob | undefined {
-  if (!/^[a-f0-9]{16}$/.test(id)) return undefined
+  if (id.length !== 16 || /[^a-f0-9]/.test(id)) return undefined
   if (jobs.has(id)) {
     const job = jobs.get(id)!
     return expectedSupaRef && job.supaRef !== expectedSupaRef ? undefined : job
