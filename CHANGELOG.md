@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 - 2026-11-21
+
+- Restore PocketBase ↔ Supabase schema and record migration with project permissions, registered destinations, and progress tracking.
+- Route Studio's Edge Function tester through the selected project's gateway.
+- Reject missing and example pg-meta encryption keys for encrypted connections in production.
+- Refresh Studio runtime dependencies.
+
 ## 1.0.2 - 2026-11-02
 
 ### Improved
