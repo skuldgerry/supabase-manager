@@ -23,6 +23,15 @@ export function assertSelfHosted() {
 }
 
 export function encryptString(stringToEncrypt: string): string {
+  // pg-meta decrypts this reversible OpenSSL/CryptoJS envelope with CRYPTO_KEY.
+  // Preserve its wire format; it is not a password hash. Local CLI development
+  // still uses SAMPLE_KEY, but production must supply an independent secret.
+  if (
+    process.env.NODE_ENV === 'production' &&
+    ['', 'SAMPLE_KEY', 'your-encryption-key-32-chars-min'].includes(ENCRYPTION_KEY.trim())
+  ) {
+    throw new Error('Configure a private PG_META_CRYPTO_KEY matching pg-meta CRYPTO_KEY before using encrypted database connections')
+  }
   return crypto.AES.encrypt(stringToEncrypt, ENCRYPTION_KEY).toString()
 }
 
