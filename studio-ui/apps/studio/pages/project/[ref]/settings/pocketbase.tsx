@@ -47,22 +47,23 @@ const PocketBaseSettingsPage: NextPageWithLayout = () => {
     enabled: !!ref,
     staleTime: 30_000,
   })
+  const isPocketBase = project?.creation_mode === 'pocketbase' || project?.creation_mode === 'pocketbase-embedded'
 
   return (
     <>
       <PageHeader size="small">
         <PageHeaderMeta>
           <PageHeaderSummary>
-            <PageHeaderTitle>PocketBase</PageHeaderTitle>
+            <PageHeaderTitle>{isPocketBase ? 'PocketBase' : 'Data Migration'}</PageHeaderTitle>
             <PageHeaderDescription>
-              Admin credentials, API URL, and data migration tools
+              Migrate collections and records between authorized PocketBase and Supabase projects.
             </PageHeaderDescription>
           </PageHeaderSummary>
         </PageHeaderMeta>
       </PageHeader>
 
       <PageContainer size="small">
-        <PageSection>
+        {isPocketBase && <PageSection>
           <PageSectionMeta>
             <PageSectionSummary>
               <PageSectionTitle>Admin Access</PageSectionTitle>
@@ -86,22 +87,23 @@ const PocketBaseSettingsPage: NextPageWithLayout = () => {
               </p>
             )}
           </PageSectionContent>
-        </PageSection>
+        </PageSection>}
 
-        <PageSection>
-          <PageSectionMeta>
-            <PageSectionSummary>
-              <PageSectionTitle>Data Migration</PageSectionTitle>
-              <PageSectionDescription>
-                Move data between this PocketBase instance and a Supabase project. Requires a
-                running Supabase project in the same Studio as the migration target/source.
-              </PageSectionDescription>
-            </PageSectionSummary>
-          </PageSectionMeta>
-          <PageSectionContent>
-            <PocketBaseMigratePanel supaRef={ref} />
-          </PageSectionContent>
-        </PageSection>
+        {!isLoading && (
+          <PageSection>
+            <PageSectionMeta>
+              <PageSectionSummary>
+                <PageSectionTitle>Data Migration</PageSectionTitle>
+                <PageSectionDescription>
+                  Choose the Supabase project and PocketBase endpoint. Manager permission is required for both endpoints.
+                </PageSectionDescription>
+              </PageSectionSummary>
+            </PageSectionMeta>
+            <PageSectionContent>
+              <PocketBaseMigratePanel supaRef={ref} />
+            </PageSectionContent>
+          </PageSection>
+        )}
       </PageContainer>
     </>
   )

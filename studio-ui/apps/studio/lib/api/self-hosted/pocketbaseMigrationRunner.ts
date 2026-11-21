@@ -36,6 +36,10 @@ export interface PBMigrationJob {
   pbAdminEmail: string
   supaRef: string
   supaPublicUrl: string
+  pbTargetId?: string
+  pbProjectRef?: string
+  pbOrganizationSlug?: string
+  pbCollectionPrefix?: string
   status: PBMigStatus
   logs: string[]
   startedAt: string
@@ -51,22 +55,25 @@ export type PBMigrationJobView = Omit<PBMigrationJob, 'pbAdminPassword' | 'supaS
 const DATA_DIR = process.env.STUDIO_DATA_DIR || path.join(/*turbopackIgnore: true*/ process.cwd(), '.studio-data')
 const MIG_DIR = path.join(DATA_DIR, 'pb-migrations')
 
-function metaPath(id: string) { return path.join(MIG_DIR, `${id}.json`) }
-function logPath(id: string)  { return path.join(MIG_DIR, `${id}.log`)  }
+function migrationPath(id: string, extension: 'json' | 'log'): string {
+  if (id.length !== 16 || /[^a-f0-9]/.test(id)) throw new Error('Invalid migration job ID')
+  return path.join(MIG_DIR, `${path.basename(id)}.${extension}`)
+}
+
+function metaPath(id: string) { return migrationPath(id, 'json') }
+function logPath(id: string)  { return migrationPath(id, 'log') }
 
 function saveMeta(job: PBMigrationJob): void {
   try {
-    fs.mkdirSync(MIG_DIR, { recursive: true })
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { logs, pbAdminPassword, supaServiceKey, ...meta } = job
-    fs.writeFileSync(metaPath(job.id), JSON.stringify(meta, null, 2), 'utf-8')
+    fs.mkdirSync(MIG_DIR, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(metaPath(job.id), JSON.stringify(jobMetadata(job), null, 2), { encoding: 'utf-8', mode: 0o600 })
   } catch { /* non-fatal */ }
 }
 
 function appendLog(id: string, line: string): void {
   try {
-    fs.mkdirSync(MIG_DIR, { recursive: true })
-    fs.appendFileSync(logPath(id), line + '\n', 'utf-8')
+    fs.mkdirSync(MIG_DIR, { recursive: true, mode: 0o700 })
+    fs.appendFileSync(logPath(id), line + '\n', { encoding: 'utf-8', mode: 0o600 })
   } catch { /* non-fatal */ }
 }
 
@@ -79,19 +86,72 @@ function readLogs(id: string): string[] {
 // ── In-memory store ───────────────────────────────────────────────────────────
 
 const jobs = new Map<string, PBMigrationJob>()
+const runtime = new Map<string, { request?: StartPBMigrationOpts['supaRequest']; secrets: string[] }>()
 
-function loadJob(id: string): PBMigrationJob | undefined {
-  if (jobs.has(id)) return jobs.get(id)
+function jobMetadata(job: PBMigrationJob): PersistedMeta {
+  return { id: job.id, direction: job.direction, pbUrl: job.pbUrl, pbAdminEmail: job.pbAdminEmail,
+    supaRef: job.supaRef, supaPublicUrl: job.supaPublicUrl, status: job.status,
+    startedAt: job.startedAt, finishedAt: job.finishedAt, pbTargetId: job.pbTargetId,
+    pbProjectRef: job.pbProjectRef, pbOrganizationSlug: job.pbOrganizationSlug, pbCollectionPrefix: job.pbCollectionPrefix }
+}
+
+function logJob(job: PBMigrationJob, message: string) {
+  const secrets = [job.pbAdminPassword, job.supaServiceKey, ...(runtime.get(job.id)?.secrets ?? [])]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .flatMap((value) => { const raw = value.replace(/^Bearer\s+/i, ''); return [value, raw, encodeURIComponent(raw), Buffer.from(raw).toString('base64')] })
+    .filter((value) => value.length > 0)
+    .sort((a, b) => b.length - a.length)
+  let clean = message.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+  for (const secret of secrets) clean = clean.split(secret).join('[REDACTED]')
+  clean = clean.slice(0, 4000)
+  job.logs.push(clean)
+  if (job.logs.length > 2000) job.logs.shift()
+  appendLog(job.id, clean)
+}
+
+const migrationFetch = (url: string, init?: RequestInit) => fetch(url, {
+  ...init, redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(30_000),
+})
+
+function supabaseRequest(job: PBMigrationJob, relative: string, init?: RequestInit): Promise<Response> {
+  const request = runtime.get(job.id)?.request
+  if (request) return request(relative, init)
+  // Compatibility for server-side callers using the original runner contract.
+  const relativePath = relative.startsWith('/pg/') ? `/pg-meta/v0/${relative.slice(4)}` : relative
+  return migrationFetch(`${job.supaPublicUrl}${relativePath}`, { ...init, headers: {
+    ...Object.fromEntries(new Headers(init?.headers)), apikey: job.supaServiceKey!, Authorization: `Bearer ${job.supaServiceKey}`,
+  } })
+}
+
+function quoteIdentifier(name: string): string {
+  if (!name || name.includes('\0')) throw new Error('Invalid database identifier')
+  return `"${name.replace(/"/g, '""')}"`
+}
+
+function loadJob(id: string, expectedSupaRef?: string): PBMigrationJob | undefined {
+  if (id.length !== 16 || /[^a-f0-9]/.test(id)) return undefined
+  if (jobs.has(id)) {
+    const job = jobs.get(id)!
+    return expectedSupaRef && job.supaRef !== expectedSupaRef ? undefined : job
+  }
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath(id), 'utf-8')) as PersistedMeta
-    const job: PBMigrationJob = { ...meta, logs: readLogs(id) }
+    if (meta.id !== id || (expectedSupaRef && meta.supaRef !== expectedSupaRef)) return undefined
+    const job: PBMigrationJob = { ...jobMetadata(meta as PBMigrationJob), logs: readLogs(id) }
+    if (job.status === 'running' || job.status === 'pending') {
+      job.status = 'error'
+      job.finishedAt = new Date().toISOString()
+      logJob(job, '[error] Migration interrupted by a Studio restart. Review partial changes before starting another migration.')
+      saveMeta(job)
+    }
     jobs.set(id, job)
     return job
   } catch { return undefined }
 }
 
-export function getPBMigrationJob(id: string): PBMigrationJobView | undefined {
-  return loadJob(id)
+export function getPBMigrationJob(id: string, expectedSupaRef?: string): PBMigrationJobView | undefined {
+  const job = loadJob(id, expectedSupaRef)
+  return job ? { ...jobMetadata(job), logs: [...job.logs] } : undefined
 }
 
 // ── Type mapping helpers ──────────────────────────────────────────────────────
@@ -127,7 +187,7 @@ function postgresTypeToPB(dataType: string): string {
 // ── PocketBase admin auth ─────────────────────────────────────────────────────
 
 async function pbAuthToken(pbUrl: string, email: string, password: string): Promise<string> {
-  const res = await fetch(`${pbUrl}/api/collections/_superusers/auth-with-password`, {
+  const res = await migrationFetch(`${pbUrl}/api/collections/_superusers/auth-with-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ identity: email, password }),
@@ -137,6 +197,7 @@ async function pbAuthToken(pbUrl: string, email: string, password: string): Prom
     throw new Error(`PocketBase auth failed: ${body.message ?? res.status}`)
   }
   const data = await res.json() as { token: string }
+  if (typeof data.token !== 'string' || !data.token) throw new Error('PocketBase authentication did not return a token')
   return data.token
 }
 
@@ -157,14 +218,14 @@ interface PBRecord {
 }
 
 async function listPBCollections(pbUrl: string, token: string): Promise<PBCollection[]> {
-  const res = await fetch(`${pbUrl}/api/collections?perPage=500`, {
+  const res = await migrationFetch(`${pbUrl}/api/collections?perPage=500`, {
     headers: { Authorization: token },
   })
   if (!res.ok) throw new Error(`Failed to list PocketBase collections: ${res.status}`)
   const body = await res.json() as { items: PBCollection[] }
   // Skip system collections (start with _) and auth/view types that don't have direct records
   return (body.items ?? []).filter(
-    (c) => !c.name.startsWith('_') && c.type !== 'view'
+    (c) => !c.name.startsWith('_') && c.type === 'base'
   )
 }
 
@@ -177,11 +238,11 @@ async function fetchAllPBRecords(
   let page = 1
   const perPage = 500
   while (true) {
-    const res = await fetch(
-      `${pbUrl}/api/collections/${collection}/records?page=${page}&perPage=${perPage}&skipTotal=1`,
+    const res = await migrationFetch(
+      `${pbUrl}/api/collections/${encodeURIComponent(collection)}/records?page=${page}&perPage=${perPage}&skipTotal=1`,
       { headers: { Authorization: token } }
     )
-    if (!res.ok) break
+    if (!res.ok) throw new Error(`PocketBase record read failed: ${res.status}`)
     const body = await res.json() as { items: PBRecord[] }
     const items = body.items ?? []
     all.push(...items)
@@ -192,26 +253,23 @@ async function fetchAllPBRecords(
 }
 
 async function runPBToSupa(job: PBMigrationJob): Promise<void> {
-  const log = (msg: string) => {
-    job.logs.push(msg)
-    appendLog(job.id, msg)
-  }
+  const log = (msg: string) => logJob(job, msg)
 
   log(`[pb→supa] Authenticating with PocketBase at ${job.pbUrl}`)
   const token = await pbAuthToken(job.pbUrl, job.pbAdminEmail, job.pbAdminPassword!)
+  runtime.get(job.id)?.secrets.push(token)
 
   log('[pb→supa] Listing collections…')
-  const collections = await listPBCollections(job.pbUrl, token)
+  const collections = (await listPBCollections(job.pbUrl, token)).filter((collection) =>
+    !job.pbCollectionPrefix || collection.name.startsWith(job.pbCollectionPrefix))
   log(`[pb→supa] Found ${collections.length} user collection(s): ${collections.map((c) => c.name).join(', ')}`)
 
-  const serviceKey = job.supaServiceKey!
   const supaHeaders = {
-    apikey: serviceKey,
-    Authorization: `Bearer ${serviceKey}`,
     'Content-Type': 'application/json',
   }
 
   for (const col of collections) {
+    const tableName = job.pbCollectionPrefix ? col.name.slice(job.pbCollectionPrefix.length) : col.name
     log(`\n[pb→supa] Processing collection: ${col.name}`)
 
     // Build CREATE TABLE SQL
@@ -224,19 +282,18 @@ async function runPBToSupa(job: PBMigrationJob): Promise<void> {
       // Skip system fields already defined above
       if (['id', 'created', 'updated'].includes(field.name)) continue
       const pgType = pbTypeToPostgres(field.type, field.options)
-      colDefs.push(`${JSON.stringify(field.name)} ${pgType}`)
+      colDefs.push(`${quoteIdentifier(field.name)} ${pgType}`)
     }
-    const createSql = `CREATE TABLE IF NOT EXISTS public.${JSON.stringify(col.name)} (${colDefs.join(', ')});`
+    const createSql = `CREATE TABLE IF NOT EXISTS public.${quoteIdentifier(tableName)} (${colDefs.join(', ')});`
 
     log(`[pb→supa]   Creating table: ${col.name}`)
-    const createRes = await fetch(`${job.supaPublicUrl}/pg-meta/v0/query`, {
+    const createRes = await supabaseRequest(job, '/pg/query', {
       method: 'POST',
       headers: supaHeaders,
       body: JSON.stringify({ query: createSql }),
     })
     if (!createRes.ok) {
-      const body = await createRes.json().catch(() => ({})) as { message?: string }
-      log(`[pb→supa]   WARNING: table creation failed: ${body.message ?? createRes.status}`)
+      throw new Error(`Table creation failed: ${createRes.status}`)
     }
 
     // Fetch records
@@ -251,8 +308,8 @@ async function runPBToSupa(job: PBMigrationJob): Promise<void> {
     let inserted = 0
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize)
-      const insertRes = await fetch(
-        `${job.supaPublicUrl}/rest/v1/${col.name}`,
+      const insertRes = await supabaseRequest(job,
+        `/rest/v1/${encodeURIComponent(tableName)}`,
         {
           method: 'POST',
           headers: {
@@ -263,8 +320,7 @@ async function runPBToSupa(job: PBMigrationJob): Promise<void> {
         }
       )
       if (!insertRes.ok) {
-        const body = await insertRes.json().catch(() => ({})) as { message?: string }
-        log(`[pb→supa]   WARNING: insert batch ${i}–${i + batch.length} failed: ${body.message ?? insertRes.status}`)
+        throw new Error(`Record insert failed: ${insertRes.status}`)
       } else {
         inserted += batch.length
       }
@@ -288,51 +344,40 @@ interface PGColumn {
 }
 
 async function listSchemaTables(
-  supaPublicUrl: string,
-  serviceKey: string,
+  job: PBMigrationJob,
   schema = 'public'
 ): Promise<PGTable[]> {
-  const res = await fetch(
-    `${supaPublicUrl}/pg-meta/v0/tables?included_schemas=${schema}`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
-  )
+  const res = await supabaseRequest(job, `/pg/tables?included_schemas=${encodeURIComponent(schema)}`)
   if (!res.ok) throw new Error(`Failed to list Postgres tables: ${res.status}`)
   return res.json() as Promise<PGTable[]>
 }
 
 async function listTableColumns(
-  supaPublicUrl: string,
-  serviceKey: string,
+  job: PBMigrationJob,
   tableId: number
 ): Promise<PGColumn[]> {
-  const res = await fetch(
-    `${supaPublicUrl}/pg-meta/v0/columns?table_id=${tableId}`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
-  )
+  const res = await supabaseRequest(job, `/pg/columns?table_id=${encodeURIComponent(String(tableId))}`)
   if (!res.ok) throw new Error(`Failed to list columns for table ${tableId}: ${res.status}`)
   return res.json() as Promise<PGColumn[]>
 }
 
 async function fetchAllSupaRows(
-  supaPublicUrl: string,
-  serviceKey: string,
+  job: PBMigrationJob,
   tableName: string
 ): Promise<Record<string, unknown>[]> {
   const all: Record<string, unknown>[] = []
   const pageSize = 1000
   let offset = 0
   while (true) {
-    const res = await fetch(
-      `${supaPublicUrl}/rest/v1/${tableName}?select=*&limit=${pageSize}&offset=${offset}`,
+    const res = await supabaseRequest(job,
+      `/rest/v1/${encodeURIComponent(tableName)}?select=*&limit=${pageSize}&offset=${offset}`,
       {
         headers: {
-          apikey: serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
           Prefer: 'count=none',
         },
       }
     )
-    if (!res.ok) break
+    if (!res.ok) throw new Error(`Supabase record read failed: ${res.status}`)
     const rows = await res.json() as Record<string, unknown>[]
     all.push(...rows)
     if (rows.length < pageSize) break
@@ -347,7 +392,7 @@ async function createPBCollection(
   name: string,
   fields: Array<{ name: string; type: string }>
 ): Promise<void> {
-  const res = await fetch(`${pbUrl}/api/collections`, {
+  const res = await migrationFetch(`${pbUrl}/api/collections`, {
     method: 'POST',
     headers: {
       Authorization: token,
@@ -356,35 +401,27 @@ async function createPBCollection(
     body: JSON.stringify({ name, type: 'base', fields }),
   })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({})) as { message?: string }
-    throw new Error(`Failed to create collection ${name}: ${body.message ?? res.status}`)
+    // Existing collections are a supported destination; other failures must stop.
+    const existing = await migrationFetch(`${pbUrl}/api/collections/${encodeURIComponent(name)}`, { headers: { Authorization: token } })
+    if (!existing.ok) throw new Error(`Failed to create collection ${name}: ${res.status}`)
   }
 }
 
 async function runSupaToPB(job: PBMigrationJob): Promise<void> {
-  const log = (msg: string) => {
-    job.logs.push(msg)
-    appendLog(job.id, msg)
-  }
-
-  const serviceKey = job.supaServiceKey!
-  const supaHeaders = {
-    apikey: serviceKey,
-    Authorization: `Bearer ${serviceKey}`,
-    'Content-Type': 'application/json',
-  }
+  const log = (msg: string) => logJob(job, msg)
 
   log(`[supa→pb] Listing tables in Supabase project ${job.supaRef}…`)
-  const tables = await listSchemaTables(job.supaPublicUrl, serviceKey)
+  const tables = await listSchemaTables(job)
   log(`[supa→pb] Found ${tables.length} table(s): ${tables.map((t) => t.name).join(', ')}`)
 
   log(`[supa→pb] Authenticating with PocketBase at ${job.pbUrl}`)
   const token = await pbAuthToken(job.pbUrl, job.pbAdminEmail, job.pbAdminPassword!)
+  runtime.get(job.id)?.secrets.push(token)
 
   for (const table of tables) {
     log(`\n[supa→pb] Processing table: ${table.name}`)
 
-    const columns = await listTableColumns(job.supaPublicUrl, serviceKey, table.id)
+    const columns = await listTableColumns(job, table.id)
     log(`[supa→pb]   ${columns.length} column(s)`)
 
     // Build PocketBase fields (skip system/Supabase columns)
@@ -394,15 +431,11 @@ async function runSupaToPB(job: PBMigrationJob): Promise<void> {
       .map((c) => ({ name: c.name, type: postgresTypeToPB(c.data_type) }))
 
     log(`[supa→pb]   Creating PocketBase collection: ${table.name}`)
-    try {
-      await createPBCollection(job.pbUrl, token, table.name, pbFields)
-    } catch (err) {
-      log(`[supa→pb]   WARNING: ${err instanceof Error ? err.message : String(err)}`)
-      // Continue — collection may already exist
-    }
+    const collectionName = `${job.pbCollectionPrefix ?? ''}${table.name}`
+    await createPBCollection(job.pbUrl, token, collectionName, pbFields)
 
     log(`[supa→pb]   Fetching rows from Supabase…`)
-    const rows = await fetchAllSupaRows(job.supaPublicUrl, serviceKey, table.name)
+    const rows = await fetchAllSupaRows(job, table.name)
     log(`[supa→pb]   ${rows.length} row(s) to migrate`)
 
     if (rows.length === 0) continue
@@ -417,21 +450,21 @@ async function runSupaToPB(job: PBMigrationJob): Promise<void> {
         for (const field of pbFields) {
           if (row[field.name] !== undefined) pbRecord[field.name] = row[field.name]
         }
-        const createRes = await fetch(
-          `${job.pbUrl}/api/collections/${table.name}/records`,
+        const createRes = await migrationFetch(
+          `${job.pbUrl}/api/collections/${encodeURIComponent(collectionName)}/records`,
           {
             method: 'POST',
             headers: { Authorization: token, 'Content-Type': 'application/json' },
             body: JSON.stringify(pbRecord),
           }
         )
-        if (createRes.ok) created++
+        if (!createRes.ok) throw new Error(`PocketBase record creation failed: ${createRes.status}`)
+        created++
       }
       log(`[supa→pb]   Inserted ${Math.min(i + batchSize, rows.length)}/${rows.length}…`)
     }
     log(`[supa→pb]   Done: ${created}/${rows.length} record(s) created in ${table.name}`)
 
-    void supaHeaders // suppress unused-var warning
   }
 }
 
@@ -444,10 +477,17 @@ export interface StartPBMigrationOpts {
   pbAdminPassword: string
   supaRef: string
   supaPublicUrl: string
-  supaServiceKey: string
+  supaServiceKey?: string
+  supaRequest?: (path: string, init?: RequestInit) => Promise<Response>
+  redactionSecrets?: string[]
+  pbTargetId?: string
+  pbProjectRef?: string
+  pbOrganizationSlug?: string
+  pbCollectionPrefix?: string
 }
 
 export function startPBMigration(opts: StartPBMigrationOpts): string {
+  if (!opts.supaRequest && !opts.supaServiceKey) throw new Error('Supabase migration access is not configured')
   const id = crypto.randomBytes(8).toString('hex')
   const job: PBMigrationJob = {
     id,
@@ -458,11 +498,16 @@ export function startPBMigration(opts: StartPBMigrationOpts): string {
     supaRef: opts.supaRef,
     supaPublicUrl: opts.supaPublicUrl,
     supaServiceKey: opts.supaServiceKey,
+    pbTargetId: opts.pbTargetId,
+    pbProjectRef: opts.pbProjectRef,
+    pbOrganizationSlug: opts.pbOrganizationSlug,
+    pbCollectionPrefix: opts.pbCollectionPrefix,
     status: 'pending',
     logs: [],
     startedAt: new Date().toISOString(),
   }
 
+  runtime.set(id, { request: opts.supaRequest, secrets: [...(opts.redactionSecrets ?? [])] })
   jobs.set(id, job)
   saveMeta(job)
 
@@ -475,18 +520,17 @@ export function startPBMigration(opts: StartPBMigrationOpts): string {
     .then(() => {
       job.status = 'done'
       job.finishedAt = new Date().toISOString()
-      job.logs.push(`[done] Migration finished at ${job.finishedAt}`)
-      appendLog(id, `[done] Migration finished at ${job.finishedAt}`)
+      logJob(job, `[done] Migration finished at ${job.finishedAt}`)
       saveMeta(job)
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       job.status = 'error'
       job.finishedAt = new Date().toISOString()
-      job.logs.push(`[error] ${msg}`)
-      appendLog(id, `[error] ${msg}`)
+      logJob(job, `[error] ${msg}`)
       saveMeta(job)
     })
+    .finally(() => { runtime.delete(id); delete job.pbAdminPassword; delete job.supaServiceKey })
 
   return id
 }

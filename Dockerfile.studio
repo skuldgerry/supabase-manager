@@ -17,14 +17,16 @@ RUN apt-get update -qq && \
   rm -rf /var/lib/apt/lists/* && \
   update-ca-certificates
 
-RUN npm install -g pnpm@10.24.0
 WORKDIR /app
 
-FROM base AS turbo
+FROM base AS build-tools
+RUN npm install -g pnpm@10.24.0
+
+FROM build-tools AS turbo
 COPY studio-ui/ .
 RUN pnpm dlx turbo@2.9.3 prune studio --docker
 
-FROM base AS dependencies
+FROM build-tools AS dependencies
 COPY --from=turbo /app/out/json ./
 COPY --from=turbo /app/out/pnpm-lock.yaml ./
 COPY studio-ui/patches/ ./patches/
